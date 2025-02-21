@@ -10,14 +10,14 @@
  * licenses/APL.txt.
  */
 
-package com.rawlabs.das.http
+package com.rawlabs.das.htttp
 
 import java.net.URI
-import java.net.http.{HttpRequest, HttpResponse}
+import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 
 import com.rawlabs.das.sdk.scala.DASTable
 import com.rawlabs.das.sdk.{DASExecuteResult, DASSdkException}
-import com.rawlabs.protocol.das.v1.query.{Qual, SortKey}
+import com.rawlabs.protocol.das.v1.query.{Operator, PathKey, Qual, SortKey}
 import com.rawlabs.protocol.das.v1.tables.{
   Column => ProtoColumn,
   ColumnDefinition,
@@ -26,55 +26,57 @@ import com.rawlabs.protocol.das.v1.tables.{
   TableId
 }
 import com.rawlabs.protocol.das.v1.types.{StringType, Type, Value, ValueString}
-import com.typesafe.scalalogging.StrictLogging
 
-class DASHttpTable(connector: DASHttpConnector, val httpConfig: HttpTableConfig) extends DASTable with StrictLogging {
+/**
+ * A single table that reads its parameters from the WHERE clause. The table name is `net_http_request`.
+ */
+class DASHttpTable extends DASTable {
 
-  /** Define columns in the schema. All are strings in this simple example. */
-  private val colNames = Seq("url", "method", "response_status_code", "request_headers", "response_body")
+  // Columns
+  private val colNames =
+    Seq("url", "method", "request_headers", "request_body", "response_status_code", "response_body")
 
-  override def getTablePathKeys = Seq.empty
-  override def getTableSortOrders(sortKeys: Seq[SortKey]) = sortKeys
+  private val tableName = "net_http_request"
 
+  /** Define our table schema. */
   val tableDefinition: TableDefinition = {
     val builder = TableDefinition
       .newBuilder()
-      .setTableId(TableId.newBuilder().setName(httpConfig.name))
-      .setDescription(s"HTTP endpoint for ${httpConfig.url}")
+      .setTableId(TableId.newBuilder().setName(tableName))
+      .setDescription("A single table that performs HTTP requests, with parameters from the WHERE clause.")
 
-    colNames.foreach { colName =>
+    colNames.foreach { col =>
       val colDef = ColumnDefinition
         .newBuilder()
-        .setName(colName)
-        .setType(
-          Type
-            .newBuilder()
-            .setString(StringType.newBuilder().setNullable(true)))
+        .setName(col)
+        .setType(Type.newBuilder().setString(StringType.newBuilder().setNullable(true)))
       builder.addColumns(colDef)
     }
 
     builder.build()
   }
 
-  /** For now, trivial estimate: just one row. */
+  // No path/sort pushdown
+  override def getTablePathKeys: Seq[PathKey] = Seq.empty
+  override def getTableSortOrders(sortKeys: Seq[SortKey]): Seq[SortKey] = sortKeys
+
+  /**
+   * We produce exactly 1 row per query, so row estimate is 1.
+   */
   override def tableEstimate(quals: Seq[Qual], columns: Seq[String]): DASTable.TableEstimate = {
     DASTable.TableEstimate(expectedNumberOfRows = 1, avgRowWidthBytes = 1000)
   }
 
+  /** For debugging, show how we plan to fetch. */
   override def explain(
       quals: Seq[Qual],
       columns: Seq[String],
       sortKeys: Seq[SortKey],
-      maybeLimit: Option[Long]): Seq[String] = {
-    Seq(
-      s"Fetch from URL: ${httpConfig.url}",
-      s"Method: ${httpConfig.method}",
-      s"Headers: ${httpConfig.headers.mkString(", ")}")
-  }
+      maybeLimit: Option[Long]): Seq[String] =
+    Seq(s"Single HTTP request, parameters from WHERE clause => columns: ${columns.mkString(", ")}")
 
   /**
-   * Execute the HTTP request, produce rows. In this simple example, each table fetches from a **single** endpoint. We
-   * produce exactly **one row** per table. If you wanted multiple requests or pagination, you’d do that here.
+   * The core: parse the WHERE clause, build an HTTP request, perform it, produce a single row.
    */
   override def execute(
       quals: Seq[Qual],
@@ -82,67 +84,120 @@ class DASHttpTable(connector: DASHttpConnector, val httpConfig: HttpTableConfig)
       sortKeys: Seq[SortKey],
       maybeLimit: Option[Long]): DASExecuteResult = {
 
-    // 1) Build request
-    val builder = HttpRequest
-      .newBuilder()
-      .uri(URI.create(httpConfig.url))
-      .method(httpConfig.method, HttpRequest.BodyPublishers.noBody())
+    val paramMap = parseQuals(quals)
 
-    // Add user headers
-    httpConfig.headers.foreach { case (k, v) => builder.header(k, v) }
+    // Extract parameters with defaults
+    val url = paramMap.getOrElse("url", "http://httpbin.org/get")
+    val method = paramMap.getOrElse("method", "GET").toUpperCase
+    val rawHeader = paramMap.getOrElse("request_headers", "")
+    val bodyStr = paramMap.getOrElse("request_body", "")
 
-    // 2) Send request
-    val httpClient = connector.getHttpClient
-    val httpRequest = builder.build()
+    // Build a simple headers map from rawHeader string "Key:Val,Key2:Val2"
+    val headers: Map[String, String] =
+      rawHeader
+        .split(",")
+        .map(_.trim)
+        .filter(_.nonEmpty)
+        .flatMap { pair =>
+          val parts = pair.split(":", 2).map(_.trim)
+          if (parts.length == 2) Some(parts(0) -> parts(1)) else None
+        }
+        .toMap
 
-    logger.info(s"Making HTTP request: ${httpConfig.method} ${httpConfig.url}")
-    val response =
-      httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString())
+    // Make the HTTP request
+    val client = HttpClient.newHttpClient()
+    val builder = HttpRequest.newBuilder().uri(URI.create(url))
 
-    // 3) Gather data into a single row
-    val rowValues: Map[String, String] = Map(
-      "url" -> httpConfig.url,
-      "method" -> httpConfig.method,
-      "response_status_code" -> response.statusCode().toString,
-      "request_headers" -> httpConfig.headers.toString(),
-      "response_body" -> response.body())
+    method match {
+      // If POST or PUT, use the body
+      case "POST" => builder.POST(HttpRequest.BodyPublishers.ofString(bodyStr))
+      case "PUT"  => builder.PUT(HttpRequest.BodyPublishers.ofString(bodyStr))
+      // Otherwise, default to GET
+      case _ => builder.GET()
+    }
 
-    // We'll produce exactly 1 row
-    val row = ProtoRow.newBuilder()
-    val wantedColumns = if (columns.isEmpty) colNames else columns
+    // Add headers
+    headers.foreach { case (k, v) => builder.header(k, v) }
 
-    // For each of the known columns, if requested, build the proto.
+    val request = builder.build()
+    val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+
+    val statusCode = response.statusCode().toString
+    val responseBody = response.body()
+
+    // Build the row. We produce only one row. (Or you could produce none if you prefer.)
+    val rowValues = Map(
+      "url" -> url,
+      "method" -> method,
+      "request_headers" -> rawHeader,
+      "request_body" -> bodyStr,
+      "response_status_code" -> statusCode,
+      "response_body" -> responseBody)
+
+    val wantedCols = if (columns.isEmpty) colNames else columns
+
+    val rowBuilder = ProtoRow.newBuilder()
     colNames.foreach { col =>
-      if (wantedColumns.contains(col)) {
-        val valueStr = Value
+      if (wantedCols.contains(col)) {
+        val value = Value
           .newBuilder()
           .setString(ValueString.newBuilder().setV(rowValues.getOrElse(col, "")))
         val protoCol = ProtoColumn
           .newBuilder()
           .setName(col)
-          .setData(valueStr)
-        row.addColumns(protoCol)
+          .setData(value)
+        rowBuilder.addColumns(protoCol)
       }
     }
 
-    // Create an iterator with a single row
-    val rowIter = Iterator(row.build())
+    val singleRow = rowBuilder.build()
+    val rowIter = Iterator(singleRow)
 
     new DASExecuteResult {
       override def hasNext: Boolean = rowIter.hasNext
       override def next(): ProtoRow = rowIter.next()
-      override def close(): Unit = { /* no-op */ }
+      override def close(): Unit = {}
     }
   }
 
-  // We do not support writes
+  // Read-only: no inserts/updates/deletes
   override def insert(row: ProtoRow): ProtoRow =
-    throw new DASSdkException("HTTP DAS is read-only: insert not supported.")
-
+    throw new DASSdkException("HTTP single-table DAS is read-only.")
   override def update(rowId: Value, newRow: ProtoRow): ProtoRow =
-    throw new DASSdkException("HTTP DAS is read-only: update not supported.")
-
+    throw new DASSdkException("HTTP single-table DAS is read-only.")
   override def delete(rowId: Value): Unit =
-    throw new DASSdkException("HTTP DAS is read-only: delete not supported.")
+    throw new DASSdkException("HTTP single-table DAS is read-only.")
 
+  // Helper: parse the simple Quals as a Map[String, String]
+  // We only handle "col = 'value'" for columns: url, method, request_headers, request_body
+  private def parseQuals(quals: Seq[Qual]): Map[String, String] = {
+    // Columns we care about
+    val validCols = Set("url", "method", "request_headers", "request_body")
+
+    val builder = Map.newBuilder[String, String]
+
+    for (q <- quals) {
+      val colName = q.getName // The "name" field in Qual
+      // Check that colName is in our known set
+      if (validCols.contains(colName)) {
+        // Check if this Qual is a SimpleQual
+        q.getQualCase match {
+          case Qual.QualCase.SIMPLE_QUAL =>
+            val sq = q.getSimpleQual
+            // We only handle 'operator == EQUALS' here
+            if (sq.getOperator == Operator.EQUALS) {
+              // Now check if the value is a string (ValueString)
+              val v = sq.getValue
+              if (v.hasString) {
+                builder += (colName -> v.getString.getV)
+              }
+            }
+
+          // If it's IS_ANY_QUAL or IS_ALL_QUAL, or any other operator, we ignore it here
+          case _ => ()
+        }
+      }
+    }
+    builder.result()
+  }
 }

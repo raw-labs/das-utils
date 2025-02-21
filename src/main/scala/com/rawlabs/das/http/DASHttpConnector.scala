@@ -13,11 +13,12 @@
 package com.rawlabs.das.http
 
 import java.net.http.HttpClient
+
 import com.typesafe.scalalogging.StrictLogging
 
 /**
- * Manages the underlying HttpClient. In a more complex scenario,
- * you could handle connection pooling, authentication tokens, etc.
+ * Manages the underlying HttpClient. In a more complex scenario, you could handle connection pooling, authentication
+ * tokens, etc.
  */
 class DASHttpConnector extends StrictLogging {
 
