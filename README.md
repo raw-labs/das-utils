@@ -6,7 +6,12 @@
 
 ## Overview
 
-This DAS plugin defines **one** table called `net_http_request`. Rather than using standard DAS options for configuration, the **URL**, **method** (GET/POST/PUT/etc.), **request headers**, and **request body** are all specified dynamically via the **WHERE** clause in your queries. For example:
+
+This DAS plugin defines **one** table called `net_http_request`.
+**The `url` must be specified** in your query’s **WHERE** clause, or else an error will be thrown.
+Optionally, you can also provide `method`, `request_headers`, and `request_body`.
+
+A typical query looks like:
 
 ```sql
 SELECT
@@ -53,25 +58,4 @@ This will start the server, typically on port 50051.
 You can find the image id by looking at the sbt output or by running:
 ```bash
 $ docker images
-```
-
-### Query Examples
-
-```sql
--- 1) GET from a custom URL
-SELECT url, response_status_code, response_body
-FROM net_http_request
-WHERE url = 'https://httpbin.org/uuid';
-
--- 2) POST request with JSON body and custom header
-SELECT
-  response_status_code,
-  response_body
-FROM
-  net_http_request
-WHERE
-  url = 'https://httpbin.org/post'
-  AND method = 'POST'
-  AND request_headers = 'Content-Type:application/json'
-  AND request_body = '{"hello":"world"}';
 ```
