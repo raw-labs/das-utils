@@ -87,7 +87,7 @@ class DASHttpTable extends DASTable {
     val paramMap = parseQuals(quals)
 
     // Extract parameters with defaults
-    val url = paramMap.getOrElse("url", throw new DASSdkException("Missing 'url' parameter in WHERE clause"))
+    val url = paramMap.getOrElse("url", throw new DASSdkException("Missing mandatory 'url' parameter in WHERE clause"))
     val method = paramMap.getOrElse("method", "GET").toUpperCase
     val rawHeader = paramMap.getOrElse("request_headers", "")
     val bodyStr = paramMap.getOrElse("request_body", "")
@@ -192,7 +192,7 @@ class DASHttpTable extends DASTable {
                 builder += (colName -> v.getString.getV)
               }
             }
-
+          // (CTM) is this what we want to do?
           // If it's IS_ANY_QUAL or IS_ALL_QUAL, or any other operator, we ignore it here
           case _ => ()
         }
