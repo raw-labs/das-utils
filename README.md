@@ -1,24 +1,38 @@
-# DAS Excel
+# DAS HTTP 
 [![License](https://img.shields.io/:license-BSL%201.1-blue.svg)](/licenses/BSL.txt)
 
 [Data Access Service](https://github.com/raw-labs/protocol-das) for making HTTP requests.
 
-## Options
+
+## Overview
+
+This DAS plugin defines **one** table called `net_http_request`. Rather than using standard DAS options for configuration, the **URL**, **method** (GET/POST/PUT/etc.), **request headers**, and **request body** are all specified dynamically via the **WHERE** clause in your queries. For example:
+
+```sql
+SELECT
+  response_status_code,
+  response_body
+FROM
+  net_http_request
+WHERE
+  url = 'https://httpbin.org/post'
+  AND method = 'POST'
+  AND request_headers = 'Content-Type:application/json'
+  AND request_body = '{"hello":"world"}'
+```
+
+## Table Schema
 
 
-
-| Name               | Description                                                                               | Default                 | Required |
-|--------------------|-------------------------------------------------------------------------------------------|-------------------------|----------|
-| `nr_tables`        | TThe number of HTTP endpoints (tables) to expose                                          | 1                       | Yes      |
-| `table0_name`      | The name for the first table                                                              | net_http_request_0      | Yes      |
-| `table0_url`       | The URL to fetch for the first table                                                      | http://httpbin.org/get  | Yes      |
-| `table0_method`    | The region where the first table is defined, e.g."A1:D100"                                |                         | Yes      |
-| `table0_headers`   | A comma-separated list of Key:Value headers to send, e.g. `User-Agent:Test,Accept:text/*` |                         | Yes      |
-| `table1_name`      | The name for the second table                                                             |                         | Yes      |
-| `table1_url`       | The URL for the second table                                                              |                         | Yes      |
-| `table1_method`    | The HTTP method for the second table                                                      |                         | Yes      |
-| `table1_headers`   | Comma-separated list of HTTP headers for the second table                                 |                         | Yes      |
-| `...`              | ... (add more settings for the remainder of the tables) ...                               |                         | Yes      |
+| Column Name            | Description                                                                                  |
+|------------------------|----------------------------------------------------------------------------------------------|
+| `url`                  | The HTTP URL.                                                                                |
+| `method`               | The HTTP method, e.g. GET/POST/PUT. Default GET if not specified                             |
+| `request_headers`      | A comma-separated list of Header:Value pairs (e.g. `Accept:application/json,User-Agent:Foo`) |
+| `request_body`         | The raw request body string. Used if method is POST or PUT. Defaults to empty string         |
+| `table1_name`          | The name for the second table                                                                |
+| `response_status_code` | The integer status code returned by the HTTP call, as a string (e.g. "200")                  |
+| `response_status_code` | The full response body as a string.                                                          |
 
 ## How to use
 
@@ -39,4 +53,25 @@ This will start the server, typically on port 50051.
 You can find the image id by looking at the sbt output or by running:
 ```bash
 $ docker images
+```
+
+### Query Examples
+
+```sql
+-- 1) GET from a custom URL
+SELECT url, response_status_code, response_body
+FROM net_http_request
+WHERE url = 'https://httpbin.org/uuid';
+
+-- 2) POST request with JSON body and custom header
+SELECT
+  response_status_code,
+  response_body
+FROM
+  net_http_request
+WHERE
+  url = 'https://httpbin.org/post'
+  AND method = 'POST'
+  AND request_headers = 'Content-Type:application/json'
+  AND request_body = '{"hello":"world"}';
 ```

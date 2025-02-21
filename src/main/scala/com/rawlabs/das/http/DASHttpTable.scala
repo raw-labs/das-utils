@@ -87,7 +87,7 @@ class DASHttpTable extends DASTable {
     val paramMap = parseQuals(quals)
 
     // Extract parameters with defaults
-    val url = paramMap.getOrElse("url", "http://httpbin.org/get")
+    val url = paramMap.getOrElse("url", throw new DASSdkException("Missing 'url' parameter in WHERE clause"))
     val method = paramMap.getOrElse("method", "GET").toUpperCase
     val rawHeader = paramMap.getOrElse("request_headers", "")
     val bodyStr = paramMap.getOrElse("request_body", "")
