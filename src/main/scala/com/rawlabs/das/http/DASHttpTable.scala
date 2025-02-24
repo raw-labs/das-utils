@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 RAW Labs S.A.
+ * Copyright 2024 RAW Labs S.A.
  *
  * Use of this software is governed by the Business Source License
  * included in the file licenses/BSL.txt.
@@ -10,10 +10,12 @@
  * licenses/APL.txt.
  */
 
-package com.rawlabs.das.htttp
+package com.rawlabs.das.http
 
 import java.net.URI
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
+
+import scala.jdk.CollectionConverters._
 
 import com.rawlabs.das.sdk.scala.DASTable
 import com.rawlabs.das.sdk.{DASExecuteResult, DASSdkException}
@@ -25,133 +27,150 @@ import com.rawlabs.protocol.das.v1.tables.{
   TableDefinition,
   TableId
 }
-import com.rawlabs.protocol.das.v1.types.{StringType, Type, Value, ValueString}
+import com.rawlabs.protocol.das.v1.types._
 
 /**
- * A single table that reads its parameters from the WHERE clause. The table name is `net_http_request`.
+ * A single-table HTTP DAS that retrieves:
+ *   - request_headers and url_args as list of strings
+ *   - other columns (url, method, request_body, follow_redirect, response_*) as usual
  */
 class DASHttpTable extends DASTable {
 
-  // Columns
-  private val colNames =
-    Seq("url", "method", "request_headers", "request_body", "response_status_code", "response_body")
+  // Define columns with their protobuf type
+  private val columns: Seq[(String, Type)] = Seq(
+    "url" -> mkStringType(nullable = false),
+    "method" -> mkStringType(nullable = false),
+    // request_headers => list of string
+    "request_headers" -> mkListOfStringsType(nullable = false),
+    // url_args => list of string
+    "url_args" -> mkListOfStringsType(nullable = false),
+    "request_body" -> mkStringType(nullable = false),
+    "follow_redirect" -> mkBoolType(nullable = false),
+    // Output columns
+    "response_status_code" -> mkIntType(nullable = false),
+    "response_body" -> mkStringType(nullable = false))
 
   private val tableName = "net_http_request"
 
-  /** Define our table schema. */
+  /** Build a TableDefinition from the columns above. */
   val tableDefinition: TableDefinition = {
     val builder = TableDefinition
       .newBuilder()
       .setTableId(TableId.newBuilder().setName(tableName))
-      .setDescription("A single table that performs HTTP requests, with parameters from the WHERE clause.")
+      .setDescription("Single-table HTTP plugin. request_headers, url_args are list[string].")
 
-    colNames.foreach { col =>
-      val colDef = ColumnDefinition
-        .newBuilder()
-        .setName(col)
-        .setType(Type.newBuilder().setString(StringType.newBuilder().setNullable(true)))
-      builder.addColumns(colDef)
+    columns.foreach { case (colName, colType) =>
+      builder.addColumns(
+        ColumnDefinition
+          .newBuilder()
+          .setName(colName)
+          .setType(colType))
     }
-
     builder.build()
   }
 
-  // No path/sort pushdown
   override def getTablePathKeys: Seq[PathKey] = Seq.empty
   override def getTableSortOrders(sortKeys: Seq[SortKey]): Seq[SortKey] = sortKeys
 
-  /**
-   * We produce exactly 1 row per query, so row estimate is 1.
-   */
   override def tableEstimate(quals: Seq[Qual], columns: Seq[String]): DASTable.TableEstimate = {
+    // Single HTTP request => single row
     DASTable.TableEstimate(expectedNumberOfRows = 1, avgRowWidthBytes = 1000)
   }
 
-  /** For debugging, show how we plan to fetch. */
   override def explain(
       quals: Seq[Qual],
       columns: Seq[String],
       sortKeys: Seq[SortKey],
       maybeLimit: Option[Long]): Seq[String] =
-    Seq(s"Single HTTP request, parameters from WHERE clause => columns: ${columns.mkString(", ")}")
+    Seq("HTTP single table. request_headers, url_args are typed as list of strings in the WHERE clause.")
 
   /**
-   * The core: parse the WHERE clause, build an HTTP request, perform it, produce a single row.
+   * The core: parse WHERE clause => build & send HTTP => produce 1 row => yield columns
    */
   override def execute(
       quals: Seq[Qual],
-      columns: Seq[String],
+      columnsRequested: Seq[String],
       sortKeys: Seq[SortKey],
       maybeLimit: Option[Long]): DASExecuteResult = {
 
-    val paramMap = parseQuals(quals)
+    // 1) Parse the typed parameters from Quals
+    val params = parseQuals(quals)
 
-    // Extract parameters with defaults
-    val url = paramMap.getOrElse("url", throw new DASSdkException("Missing mandatory 'url' parameter in WHERE clause"))
-    val method = paramMap.getOrElse("method", "GET").toUpperCase
-    val rawHeader = paramMap.getOrElse("request_headers", "")
-    val bodyStr = paramMap.getOrElse("request_body", "")
+    // 2) Validate required fields
+    val url = params.url.getOrElse {
+      throw new DASSdkException("Missing 'url' in WHERE clause")
+    }
+    val method = params.method.getOrElse("GET").toUpperCase
+    val requestHeaders = params.requestHeaders.getOrElse(Nil)
+    val urlArgs = params.urlArgs.getOrElse(Nil)
+    val body = params.requestBody.getOrElse("")
+    val followRedirect = params.followRedirect.getOrElse(false)
 
-    // Build a simple headers map from rawHeader string "Key:Val,Key2:Val2"
-    val headers: Map[String, String] =
-      rawHeader
-        .split(",")
-        .map(_.trim)
-        .filter(_.nonEmpty)
-        .flatMap { pair =>
-          val parts = pair.split(":", 2).map(_.trim)
-          if (parts.length == 2) Some(parts(0) -> parts(1)) else None
-        }
-        .toMap
-
-    // Make the HTTP request
-    val client = HttpClient.newHttpClient()
-    val builder = HttpRequest.newBuilder().uri(URI.create(url))
-
-    method match {
-      // If POST or PUT, use the body
-      case "POST" => builder.POST(HttpRequest.BodyPublishers.ofString(bodyStr))
-      case "PUT"  => builder.PUT(HttpRequest.BodyPublishers.ofString(bodyStr))
-      // Otherwise, default to GET
-      case _ => builder.GET()
+    // 3) Build HttpClient
+    val client = {
+      val b = HttpClient.newBuilder()
+      if (followRedirect) b.followRedirects(HttpClient.Redirect.ALWAYS)
+      else b.followRedirects(HttpClient.Redirect.NEVER)
+      b.build()
     }
 
-    // Add headers
-    headers.foreach { case (k, v) => builder.header(k, v) }
+    // 4) Construct the final URL with urlArgs if you like (like "?foo=bar&test=123").
+    //    Or you can handle them differently. For simplicity, let's assume we just do "baseUrl?arg1&arg2"
+    val finalUrl = buildUrlWithArgs(url, urlArgs)
 
-    val request = builder.build()
-    val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+    // 5) Create request
+    val requestBuilder = HttpRequest.newBuilder().uri(URI.create(finalUrl))
+    method match {
+      case "POST" => requestBuilder.POST(HttpRequest.BodyPublishers.ofString(body))
+      case "PUT"  => requestBuilder.PUT(HttpRequest.BodyPublishers.ofString(body))
+      case _      => requestBuilder.GET()
+    }
 
-    val statusCode = response.statusCode().toString
-    val responseBody = response.body()
+    // 6) Add request headers (list of "Header:Value" strings)
+    requestHeaders.foreach { hv =>
+      val keyValue = hv.split(":", 2) match {
+        case Array(key, value) => Array(key.trim, value.trim)
+        case _                 => Array("Unknown-Header", hv)
+      }
+      requestBuilder.header(keyValue(0), keyValue(1))
+    }
 
-    // Build the row. We produce only one row. (Or you could produce none if you prefer.)
-    val rowValues = Map(
-      "url" -> url,
-      "method" -> method,
-      "request_headers" -> rawHeader,
-      "request_body" -> bodyStr,
-      "response_status_code" -> statusCode,
-      "response_body" -> responseBody)
+    // 7) Send
+    val response = client.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString())
+    val statusCode = response.statusCode()
+    val respBody = response.body()
 
-    val wantedCols = if (columns.isEmpty) colNames else columns
-
+    // 8) Build a single row with all columns
     val rowBuilder = ProtoRow.newBuilder()
-    colNames.foreach { col =>
-      if (wantedCols.contains(col)) {
-        val value = Value
-          .newBuilder()
-          .setString(ValueString.newBuilder().setV(rowValues.getOrElse(col, "")))
-        val protoCol = ProtoColumn
-          .newBuilder()
-          .setName(col)
-          .setData(value)
-        rowBuilder.addColumns(protoCol)
+
+    // If the user didn't request any columns, we default to returning all. Or
+    // if columnsRequested is empty, let's say we return them all anyway.
+    val wantedCols = if (columnsRequested.isEmpty) columns.map(_._1) else columnsRequested
+
+    // Convert everything into a Map of col -> Value
+    val colValues: Map[String, Value] = Map(
+      "url" -> mkStringValue(url),
+      "method" -> mkStringValue(method),
+      "request_headers" -> mkListOfStrings(requestHeaders),
+      "url_args" -> mkListOfStrings(urlArgs),
+      "request_body" -> mkStringValue(body),
+      "follow_redirect" -> Value.newBuilder().setBool(ValueBool.newBuilder().setV(followRedirect)).build(),
+      "response_status_code" -> Value.newBuilder().setInt(ValueInt.newBuilder().setV(statusCode)).build(),
+      "response_body" -> mkStringValue(respBody))
+
+    // Add them if in wantedCols
+    columns.foreach { case (colName, _) =>
+      if (wantedCols.contains(colName)) {
+        val valObj = colValues.getOrElse(colName, mkStringValue(""))
+        rowBuilder.addColumns(
+          ProtoColumn
+            .newBuilder()
+            .setName(colName)
+            .setData(valObj))
       }
     }
 
-    val singleRow = rowBuilder.build()
-    val rowIter = Iterator(singleRow)
+    val rowIter = Iterator(rowBuilder.build())
 
     new DASExecuteResult {
       override def hasNext: Boolean = rowIter.hasNext
@@ -160,44 +179,140 @@ class DASHttpTable extends DASTable {
     }
   }
 
-  // Read-only: no inserts/updates/deletes
+  // read-only
   override def insert(row: ProtoRow): ProtoRow =
-    throw new DASSdkException("HTTP single-table DAS is read-only.")
+    throw new DASSdkException("HTTP single-table is read-only.")
   override def update(rowId: Value, newRow: ProtoRow): ProtoRow =
-    throw new DASSdkException("HTTP single-table DAS is read-only.")
+    throw new DASSdkException("HTTP single-table is read-only.")
   override def delete(rowId: Value): Unit =
-    throw new DASSdkException("HTTP single-table DAS is read-only.")
+    throw new DASSdkException("HTTP single-table is read-only.")
 
-  // Helper: parse the simple Quals as a Map[String, String]
-  // We only handle "col = 'value'" for columns: url, method, request_headers, request_body
-  private def parseQuals(quals: Seq[Qual]): Map[String, String] = {
-    // Columns we care about
-    val validCols = Set("url", "method", "request_headers", "request_body")
+  // --------------------------------------------------------------------------------
+  // Helper: parse typed columns from Quals
+  // --------------------------------------------------------------------------------
 
-    val builder = Map.newBuilder[String, String]
+  /**
+   * We define a small container for the typed columns that can appear in WHERE.
+   */
+  private case class ParsedParams(
+      url: Option[String] = None,
+      method: Option[String] = None,
+      requestHeaders: Option[List[String]] = None,
+      urlArgs: Option[List[String]] = None,
+      requestBody: Option[String] = None,
+      followRedirect: Option[Boolean] = None)
+
+  /**
+   * parseQuals converts Quals to typed fields. We only handle "operator = EQUALS", and we check the underlying Value's
+   * type (string vs list vs bool).
+   */
+  private def parseQuals(quals: Seq[Qual]): ParsedParams = {
+    var result = ParsedParams()
 
     for (q <- quals) {
-      val colName = q.getName // The "name" field in Qual
-      // Check that colName is in our known set
-      if (validCols.contains(colName)) {
-        // Check if this Qual is a SimpleQual
-        q.getQualCase match {
-          case Qual.QualCase.SIMPLE_QUAL =>
-            val sq = q.getSimpleQual
-            // We only handle 'operator == EQUALS' here
-            if (sq.getOperator == Operator.EQUALS) {
-              // Now check if the value is a string (ValueString)
-              val v = sq.getValue
+      val colName = q.getName
+      if (q.hasSimpleQual) {
+        val sq = q.getSimpleQual
+        if (sq.getOperator == Operator.EQUALS) {
+          val v = sq.getValue
+          colName match {
+            case "url" =>
               if (v.hasString) {
-                builder += (colName -> v.getString.getV)
+                result = result.copy(url = Some(v.getString.getV))
               }
-            }
-          // (CTM) is this what we want to do?
-          // If it's IS_ANY_QUAL or IS_ALL_QUAL, or any other operator, we ignore it here
-          case _ => ()
+            case "method" =>
+              if (v.hasString) {
+                result = result.copy(method = Some(v.getString.getV))
+              }
+            case "request_body" =>
+              if (v.hasString) {
+                result = result.copy(requestBody = Some(v.getString.getV))
+              }
+            case "follow_redirect" =>
+              if (v.hasBool) {
+                result = result.copy(followRedirect = Some(v.getBool.getV))
+              }
+            case "request_headers" =>
+              // We expect a ValueList of strings
+              if (v.hasList) {
+                val vl = v.getList
+                // convert each item => string
+                val items = vl.getValuesList.asScala.toList.flatMap { it =>
+                  if (it.hasString) Some(it.getString.getV)
+                  else None
+                }
+                result = result.copy(requestHeaders = Some(items))
+              }
+            case "url_args" =>
+              if (v.hasList) {
+                val vl = v.getList
+                val items = vl.getValuesList.asScala.toList.flatMap { it =>
+                  if (it.hasString) Some(it.getString.getV)
+                  else None
+                }
+                result = result.copy(urlArgs = Some(items))
+              }
+            case _ => // ignore or skip
+          }
         }
       }
     }
-    builder.result()
+    result
+  }
+
+  // --------------------------------------------------------------------------------
+  // Additional helper methods
+  // --------------------------------------------------------------------------------
+
+  /**
+   * Build the final URL with appended query args if needed. E.g., if urlArgs has ["foo=bar","debug=true"], we do
+   * "?foo=bar&debug=true".
+   */
+  private def buildUrlWithArgs(baseUrl: String, args: List[String]): String = {
+    if (args.isEmpty) baseUrl
+    else {
+      val sep = if (baseUrl.contains("?")) "&" else "?"
+      val encoded = args.map(_.trim).mkString("&")
+      s"$baseUrl$sep$encoded"
+    }
+  }
+
+  private def mkStringValue(s: String): Value = {
+    Value.newBuilder().setString(ValueString.newBuilder().setV(s)).build()
+  }
+
+  private def mkListOfStrings(lst: List[String]): Value = {
+    val listBuilder = ValueList.newBuilder()
+    lst.foreach { strItem =>
+      val itemVal = Value.newBuilder().setString(ValueString.newBuilder().setV(strItem)).build()
+      listBuilder.addValues(itemVal)
+    }
+    Value.newBuilder().setList(listBuilder).build()
+  }
+
+  private def mkStringType(nullable: Boolean): Type = {
+    val builder = Type.newBuilder().setString(StringType.newBuilder().setNullable(nullable))
+    builder.build()
+  }
+
+  private def mkBoolType(nullable: Boolean): Type = {
+    val builder = Type.newBuilder().setBool(BoolType.newBuilder().setNullable(nullable))
+    builder.build()
+  }
+
+  private def mkIntType(nullable: Boolean): Type = {
+    val builder = Type.newBuilder().setInt(IntType.newBuilder().setNullable(nullable))
+    builder.build()
+  }
+
+  private def mkListOfStringsType(nullable: Boolean): Type = {
+    val builder = Type
+      .newBuilder()
+      .setList(
+        ListType
+          .newBuilder()
+          .setInnerType(Type.newBuilder().setString(StringType.newBuilder().setNullable(nullable)))
+          .setNullable(false))
+    builder.build()
   }
 }

@@ -12,7 +12,6 @@
 
 package com.rawlabs.das.http
 
-import com.rawlabs.das.htttp.DASHttpTable
 import com.rawlabs.das.sdk.scala.{DASFunction, DASSdk}
 import com.rawlabs.protocol.das.v1.functions.FunctionDefinition
 import com.rawlabs.protocol.das.v1.tables.TableDefinition
