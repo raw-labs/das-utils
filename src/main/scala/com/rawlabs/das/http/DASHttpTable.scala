@@ -1,5 +1,5 @@
 /*
- * Copyright 2024 RAW Labs S.A.
+ * Copyright 2025 RAW Labs S.A.
  *
  * Use of this software is governed by the Business Source License
  * included in the file licenses/BSL.txt.
@@ -11,7 +11,6 @@
  */
 
 package com.rawlabs.das.http
-
 import java.net.URI
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 
@@ -38,17 +37,17 @@ class DASHttpTable extends DASTable {
 
   // Define columns with their protobuf type
   private val columns: Seq[(String, Type)] = Seq(
-    "url" -> mkStringType(nullable = false),
-    "method" -> mkStringType(nullable = false),
-    // request_headers => list of string
-    "request_headers" -> mkListOfStringsType(nullable = false),
-    // url_args => list of string
-    "url_args" -> mkListOfStringsType(nullable = false),
-    "request_body" -> mkStringType(nullable = false),
-    "follow_redirect" -> mkBoolType(nullable = false),
+    "url" -> mkStringType(),
+    "method" -> mkStringType(),
+    // request_headers => jsonb record
+    "request_headers" -> mkRecordType(),
+    // url_args => jsonb record
+    "url_args" -> mkRecordType(),
+    "request_body" -> mkStringType(),
+    "follow_redirect" -> mkBoolType(),
     // Output columns
-    "response_status_code" -> mkIntType(nullable = false),
-    "response_body" -> mkStringType(nullable = false))
+    "response_status_code" -> mkIntType(),
+    "response_body" -> mkStringType())
 
   private val tableName = "net_http_request"
 
@@ -57,7 +56,7 @@ class DASHttpTable extends DASTable {
     val builder = TableDefinition
       .newBuilder()
       .setTableId(TableId.newBuilder().setName(tableName))
-      .setDescription("Single-table HTTP plugin. request_headers, url_args are list[string].")
+      .setDescription("Single-table HTTP plugin.")
 
     columns.foreach { case (colName, colType) =>
       builder.addColumns(
@@ -82,7 +81,7 @@ class DASHttpTable extends DASTable {
       columns: Seq[String],
       sortKeys: Seq[SortKey],
       maybeLimit: Option[Long]): Seq[String] =
-    Seq("HTTP single table. request_headers, url_args are typed as list of strings in the WHERE clause.")
+    Seq("HTTP single table.")
 
   /**
    * The core: parse WHERE clause => build & send HTTP => produce 1 row => yield columns
@@ -101,8 +100,8 @@ class DASHttpTable extends DASTable {
       throw new DASSdkException("Missing 'url' in WHERE clause")
     }
     val method = params.method.getOrElse("GET").toUpperCase
-    val requestHeaders = params.requestHeaders.getOrElse(Nil)
-    val urlArgs = params.urlArgs.getOrElse(Nil)
+    val requestHeaders = params.requestHeaders.getOrElse(Map.empty)
+    val urlArgs = params.urlArgs.getOrElse(Map.empty)
     val body = params.requestBody.getOrElse("")
     val followRedirect = params.followRedirect.getOrElse(false)
 
@@ -126,14 +125,8 @@ class DASHttpTable extends DASTable {
       case _      => requestBuilder.GET()
     }
 
-    // 6) Add request headers (list of "Header:Value" strings)
-    requestHeaders.foreach { hv =>
-      val keyValue = hv.split(":", 2) match {
-        case Array(key, value) => Array(key.trim, value.trim)
-        case _                 => Array("Unknown-Header", hv)
-      }
-      requestBuilder.header(keyValue(0), keyValue(1))
-    }
+    // 6) Add request headers
+    requestHeaders.foreach { case (k, v) => requestBuilder.header(k, v) }
 
     // 7) Send
     val response = client.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString())
@@ -151,8 +144,8 @@ class DASHttpTable extends DASTable {
     val colValues: Map[String, Value] = Map(
       "url" -> mkStringValue(url),
       "method" -> mkStringValue(method),
-      "request_headers" -> mkListOfStrings(requestHeaders),
-      "url_args" -> mkListOfStrings(urlArgs),
+      "request_headers" -> mkRecordValue(requestHeaders),
+      "url_args" -> mkRecordValue(urlArgs),
       "request_body" -> mkStringValue(body),
       "follow_redirect" -> Value.newBuilder().setBool(ValueBool.newBuilder().setV(followRedirect)).build(),
       "response_status_code" -> Value.newBuilder().setInt(ValueInt.newBuilder().setV(statusCode)).build(),
@@ -197,8 +190,8 @@ class DASHttpTable extends DASTable {
   private case class ParsedParams(
       url: Option[String] = None,
       method: Option[String] = None,
-      requestHeaders: Option[List[String]] = None,
-      urlArgs: Option[List[String]] = None,
+      requestHeaders: Option[Map[String, String]] = None,
+      urlArgs: Option[Map[String, String]] = None,
       requestBody: Option[String] = None,
       followRedirect: Option[Boolean] = None)
 
@@ -219,38 +212,59 @@ class DASHttpTable extends DASTable {
             case "url" =>
               if (v.hasString) {
                 result = result.copy(url = Some(v.getString.getV))
+              } else {
+                throw new DASSdkException("url must be a string")
               }
             case "method" =>
               if (v.hasString) {
                 result = result.copy(method = Some(v.getString.getV))
+              } else {
+                throw new DASSdkException("method must be a string")
               }
             case "request_body" =>
               if (v.hasString) {
                 result = result.copy(requestBody = Some(v.getString.getV))
+              } else {
+                throw new DASSdkException("request_body must be a string")
               }
             case "follow_redirect" =>
               if (v.hasBool) {
                 result = result.copy(followRedirect = Some(v.getBool.getV))
+              } else {
+                throw new DASSdkException("follow_redirect must be a boolean")
               }
             case "request_headers" =>
-              // We expect a ValueList of strings
-              if (v.hasList) {
-                val vl = v.getList
-                // convert each item => string
-                val items = vl.getValuesList.asScala.toList.flatMap { it =>
-                  if (it.hasString) Some(it.getString.getV)
-                  else None
+              if (v.hasRecord) {
+                val rec = v.getRecord
+                val items = rec.getAttsList.asScala.toList.flatMap { it =>
+                  if (it.getValue.hasString) {
+                    val key = it.getName
+                    val value = it.getValue.getString.getV
+                    Some(key -> value)
+                  } else {
+                    throw new DASSdkException("request_headers must be a record of strings")
+                  }
                 }
-                result = result.copy(requestHeaders = Some(items))
+                result = result.copy(requestHeaders = Some(items.toMap))
+              } else {
+                throw new DASSdkException("request_headers must be a record")
               }
+
             case "url_args" =>
-              if (v.hasList) {
-                val vl = v.getList
-                val items = vl.getValuesList.asScala.toList.flatMap { it =>
-                  if (it.hasString) Some(it.getString.getV)
-                  else None
+              if (v.hasRecord) {
+                val rec = v.getRecord
+                val items = rec.getAttsList.asScala.toList.flatMap { it =>
+                  if (it.getValue.hasString) {
+                    val key = it.getName
+                    val value = it.getValue.getString.getV
+                    Some(key -> value)
+                  } else {
+                    throw new DASSdkException("url_args must be a record of strings")
+                  }
                 }
-                result = result.copy(urlArgs = Some(items))
+                result = result.copy(urlArgs = Some(items.toMap))
+              } else {
+                throw new DASSdkException("url_args must be a record")
               }
             case _ => // ignore or skip
           }
@@ -268,11 +282,11 @@ class DASHttpTable extends DASTable {
    * Build the final URL with appended query args if needed. E.g., if urlArgs has ["foo=bar","debug=true"], we do
    * "?foo=bar&debug=true".
    */
-  private def buildUrlWithArgs(baseUrl: String, args: List[String]): String = {
+  private def buildUrlWithArgs(baseUrl: String, args: Map[String, String]): String = {
     if (args.isEmpty) baseUrl
     else {
       val sep = if (baseUrl.contains("?")) "&" else "?"
-      val encoded = args.map(_.trim).mkString("&")
+      val encoded = args.map { case (k, v) => k + "=" + java.net.URLEncoder.encode(v, "UTF-8") }.mkString("&")
       s"$baseUrl$sep$encoded"
     }
   }
@@ -281,38 +295,34 @@ class DASHttpTable extends DASTable {
     Value.newBuilder().setString(ValueString.newBuilder().setV(s)).build()
   }
 
-  private def mkListOfStrings(lst: List[String]): Value = {
-    val listBuilder = ValueList.newBuilder()
-    lst.foreach { strItem =>
-      val itemVal = Value.newBuilder().setString(ValueString.newBuilder().setV(strItem)).build()
-      listBuilder.addValues(itemVal)
+  private def mkRecordValue(values: Map[String, String]) = {
+    val recordBuilder = ValueRecord.newBuilder()
+    val atts = values.map { case (k, v) =>
+      val value = Value.newBuilder().setString(ValueString.newBuilder().setV(v)).build()
+      ValueRecordAttr.newBuilder().setName(k).setValue(value).build()
+
     }
-    Value.newBuilder().setList(listBuilder).build()
+    recordBuilder.addAllAtts(atts.asJava)
+    Value.newBuilder().setRecord(recordBuilder).build()
   }
 
-  private def mkStringType(nullable: Boolean): Type = {
-    val builder = Type.newBuilder().setString(StringType.newBuilder().setNullable(nullable))
+  private def mkStringType(): Type = {
+    val builder = Type.newBuilder().setString(StringType.newBuilder().setNullable(false))
     builder.build()
   }
 
-  private def mkBoolType(nullable: Boolean): Type = {
-    val builder = Type.newBuilder().setBool(BoolType.newBuilder().setNullable(nullable))
+  private def mkBoolType(): Type = {
+    val builder = Type.newBuilder().setBool(BoolType.newBuilder().setNullable(false))
     builder.build()
   }
 
-  private def mkIntType(nullable: Boolean): Type = {
-    val builder = Type.newBuilder().setInt(IntType.newBuilder().setNullable(nullable))
+  private def mkIntType(): Type = {
+    val builder = Type.newBuilder().setInt(IntType.newBuilder().setNullable(false))
     builder.build()
   }
 
-  private def mkListOfStringsType(nullable: Boolean): Type = {
-    val builder = Type
-      .newBuilder()
-      .setList(
-        ListType
-          .newBuilder()
-          .setInnerType(Type.newBuilder().setString(StringType.newBuilder().setNullable(nullable)))
-          .setNullable(false))
+  private def mkRecordType(): Type = {
+    val builder = Type.newBuilder().setRecord(RecordType.newBuilder().setNullable(false))
     builder.build()
   }
 }
