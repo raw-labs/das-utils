@@ -29,9 +29,7 @@ import com.rawlabs.protocol.das.v1.tables.{
 import com.rawlabs.protocol.das.v1.types._
 
 /**
- * A single-table HTTP DAS that retrieves:
- *   - request_headers and url_args as list of strings
- *   - other columns (url, method, request_body, follow_redirect, response_*) as usual
+ * A single-table HTTP DAS that retrieves data from an HTTP endpoint
  */
 class DASHttpTable extends DASTable {
 
@@ -199,81 +197,93 @@ class DASHttpTable extends DASTable {
    * parseQuals converts Quals to typed fields. We only handle "operator = EQUALS", and we check the underlying Value's
    * type (string vs list vs bool).
    */
+
+  /**
+   * parseQuals converts Quals to typed fields. We only handle operator == EQUALS, and we check the Value's type
+   * carefully, throwing if it doesn't match.
+   */
   private def parseQuals(quals: Seq[Qual]): ParsedParams = {
     var result = ParsedParams()
 
     for (q <- quals) {
       val colName = q.getName
-      if (q.hasSimpleQual) {
-        val sq = q.getSimpleQual
-        if (sq.getOperator == Operator.EQUALS) {
-          val v = sq.getValue
-          colName match {
-            case "url" =>
-              if (v.hasString) {
-                result = result.copy(url = Some(v.getString.getV))
-              } else {
-                throw new DASSdkException("url must be a string")
-              }
-            case "method" =>
-              if (v.hasString) {
-                result = result.copy(method = Some(v.getString.getV))
-              } else {
-                throw new DASSdkException("method must be a string")
-              }
-            case "request_body" =>
-              if (v.hasString) {
-                result = result.copy(requestBody = Some(v.getString.getV))
-              } else {
-                throw new DASSdkException("request_body must be a string")
-              }
-            case "follow_redirect" =>
-              if (v.hasBool) {
-                result = result.copy(followRedirect = Some(v.getBool.getV))
-              } else {
-                throw new DASSdkException("follow_redirect must be a boolean")
-              }
-            case "request_headers" =>
-              if (v.hasRecord) {
-                val rec = v.getRecord
-                val items = rec.getAttsList.asScala.toList.flatMap { it =>
-                  if (it.getValue.hasString) {
-                    val key = it.getName
-                    val value = it.getValue.getString.getV
-                    Some(key -> value)
-                  } else {
-                    throw new DASSdkException("request_headers must be a record of strings")
-                  }
-                }
-                result = result.copy(requestHeaders = Some(items.toMap))
-              } else {
-                throw new DASSdkException("request_headers must be a record")
-              }
 
-            case "url_args" =>
-              if (v.hasRecord) {
-                val rec = v.getRecord
-                val items = rec.getAttsList.asScala.toList.flatMap { it =>
-                  if (it.getValue.hasString) {
-                    val key = it.getName
-                    val value = it.getValue.getString.getV
-                    Some(key -> value)
-                  } else {
-                    throw new DASSdkException("url_args must be a record of strings")
-                  }
-                }
-                result = result.copy(urlArgs = Some(items.toMap))
-              } else {
-                throw new DASSdkException("url_args must be a record")
-              }
-            case _ => // ignore or skip
+      // We only handle simpleQual
+      if (!q.hasSimpleQual) {
+        throw new DASSdkException(s"Column '$colName' must be a simple equality.")
+      }
+
+      val sq = q.getSimpleQual
+
+      // We only handle operator = EQUALS
+      if (sq.getOperator != Operator.EQUALS) {
+        throw new DASSdkException(s"Only EQUALS operator is supported. Found ${sq.getOperator} for column '$colName'.")
+      }
+
+      val v = sq.getValue
+
+      colName match {
+        case "url" =>
+          if (!v.hasString) {
+            throw new DASSdkException("Column 'url' must be a string value.")
           }
-        }
+          result = result.copy(url = Some(v.getString.getV))
+
+        case "method" =>
+          if (!v.hasString) {
+            throw new DASSdkException("Column 'method' must be a string value.")
+          }
+          result = result.copy(method = Some(v.getString.getV))
+
+        case "request_body" =>
+          if (!v.hasString) {
+            throw new DASSdkException("Column 'request_body' must be a string value.")
+          }
+          result = result.copy(requestBody = Some(v.getString.getV))
+
+        case "follow_redirect" =>
+          if (!v.hasBool) {
+            throw new DASSdkException("Column 'follow_redirect' must be a boolean value.")
+          }
+          result = result.copy(followRedirect = Some(v.getBool.getV))
+
+        case "request_headers" =>
+          if (!v.hasRecord) {
+            throw new DASSdkException("Column 'request_headers' must be a record.")
+          }
+          val rec = v.getRecord
+          val items = rec.getAttsList.asScala.toList.map { it =>
+            val key = it.getName
+            val value = it.getValue
+            if (!value.hasString) {
+              throw new DASSdkException("Column 'request_headers' must be a record of string values.")
+            }
+            key -> value.getString.getV
+          }
+          result = result.copy(requestHeaders = Some(items.toMap))
+
+        case "url_args" =>
+          if (!v.hasRecord) {
+            throw new DASSdkException("Column 'url_args' must be a record.")
+          }
+          val rec = v.getRecord
+          val items = rec.getAttsList.asScala.toList.map { it =>
+            val key = it.getName
+            val value = it.getValue
+            if (!value.hasString) {
+              throw new DASSdkException("Column 'url_args' must be a record of string values.")
+            }
+            key -> value.getString.getV
+          }
+          result = result.copy(urlArgs = Some(items.toMap))
+
+        // If you want to **throw** on unknown columns:
+        case unknown =>
+          throw new DASSdkException(s"Column '$unknown' is not recognized by this DAS.")
       }
     }
     result
   }
-
   // --------------------------------------------------------------------------------
   // Additional helper methods
   // --------------------------------------------------------------------------------
