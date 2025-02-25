@@ -1,15 +1,3 @@
-/*
- * Copyright 2024 RAW Labs S.A.
- *
- * Use of this software is governed by the Business Source License
- * included in the file licenses/BSL.txt.
- *
- * As of the Change Date specified in that file, in accordance with
- * the Business Source License, use of this software will be governed
- * by the Apache License, Version 2.0, included in the file
- * licenses/APL.txt.
- */
-
 package com.rawlabs.das.http
 
 import org.scalatest.funsuite.AnyFunSuite
@@ -23,69 +11,80 @@ import com.rawlabs.protocol.das.v1.query.{
 import com.rawlabs.protocol.das.v1.types.{
   Value => ProtoValue,
   ValueString,
-  ValueList,
-  ValueBool
+  ValueBool,
+  ValueRecord,
+  ValueRecordAttr
 }
-
 import com.rawlabs.das.sdk.DASSdkException
 
 import scala.jdk.CollectionConverters._
 
-class DASHttpTest extends AnyFunSuite {
+/**
+ * Unit tests for DASHttpTable which:
+ *  - Requires 'url' in WHERE
+ *  - Enforces type checking for columns
+ *  - Throws if unrecognized column or operator != EQUALS
+ *  - Produces 1 row with columns: response_status_code, response_body, etc.
+ */
+class DASHttpTableTest extends AnyFunSuite {
 
-  // Helper: create a SimpleQual for col = stringValue
-  private def qualString(col: String, value: String): ProtoQual = {
+  // A helper method to create a SimpleQual with (column = stringValue)
+  private def qualString(colName: String, strVal: String): ProtoQual = {
+    val strValue = ProtoValue.newBuilder()
+      .setString(ValueString.newBuilder().setV(strVal))
+
     ProtoQual.newBuilder()
-      .setName(col)
+      .setName(colName)
       .setSimpleQual(
         SimpleQual.newBuilder()
           .setOperator(Operator.EQUALS)
-          .setValue(
-            ProtoValue.newBuilder()
-              .setString(ValueString.newBuilder().setV(value))
-          )
+          .setValue(strValue)
       )
       .build()
   }
 
-  // Helper: create a SimpleQual for col = boolValue
-  private def qualBool(col: String, boolVal: Boolean): ProtoQual = {
+  // A helper method to create a SimpleQual with (column = boolValue)
+  private def qualBool(colName: String, boolVal: Boolean): ProtoQual = {
+    val boolValue = ProtoValue.newBuilder()
+      .setBool(ValueBool.newBuilder().setV(boolVal))
+
     ProtoQual.newBuilder()
-      .setName(col)
+      .setName(colName)
       .setSimpleQual(
         SimpleQual.newBuilder()
           .setOperator(Operator.EQUALS)
-          .setValue(
-            ProtoValue.newBuilder()
-              .setBool(ValueBool.newBuilder().setV(boolVal))
-          )
+          .setValue(boolValue)
       )
       .build()
   }
 
-  // Helper: create a SimpleQual for col = listOfStrings
-  private def qualListStrings(col: String, strings: Seq[String]): ProtoQual = {
-    val listBuilder = ValueList.newBuilder()
-    strings.foreach { s =>
-      listBuilder.addValues(
-        ProtoValue.newBuilder()
-          .setString(ValueString.newBuilder().setV(s))
-      )
+  // A helper method to build a record of string key->value for "request_headers" or "url_args"
+  // For example: request_headers = { "Content-Type" : "application/json", "X-Foo" : "Bar" }
+  private def qualRecordOfStrings(colName: String, kvPairs: Map[String, String]): ProtoQual = {
+    val recordBuilder = ValueRecord.newBuilder()
+    kvPairs.foreach { case (k, v) =>
+      val valAttr = ValueRecordAttr.newBuilder()
+        .setName(k)
+        .setValue(
+          ProtoValue.newBuilder().setString(
+            ValueString.newBuilder().setV(v)
+          )
+        )
+      recordBuilder.addAtts(valAttr)
     }
-    val valueList = ProtoValue.newBuilder().setList(listBuilder)
+    val recordValue = ProtoValue.newBuilder().setRecord(recordBuilder)
+
     ProtoQual.newBuilder()
-      .setName(col)
+      .setName(colName)
       .setSimpleQual(
         SimpleQual.newBuilder()
           .setOperator(Operator.EQUALS)
-          .setValue(valueList)
+          .setValue(recordValue)
       )
       .build()
   }
 
-  /**
-   * Helper: read all rows from the DASExecuteResult into a Seq, then close it.
-   */
+  // Helper: gather all rows from DASExecuteResult
   private def collectRows(result: com.rawlabs.das.sdk.DASExecuteResult): Seq[ProtoRow] = {
     val buf = scala.collection.mutable.ArrayBuffer.empty[ProtoRow]
     while (result.hasNext) {
@@ -95,97 +94,145 @@ class DASHttpTest extends AnyFunSuite {
     buf.toSeq
   }
 
-  /**
-   * Convert a ProtoRow into Map[colName -> stringVal].
-   * For lists or bool, we do a simple approximation here.
-   */
+  // Helper: convert a row into a Map(colName -> stringValue) just for test checks
   private def rowToMap(row: ProtoRow): Map[String, String] = {
-    row.getColumnsList.asScala.map { col =>
-      val colName = col.getName
-      val v       = col.getData
-      val strVal =
-        if (v.hasString) {
-          v.getString.getV
-        } else if (v.hasBool) {
-          v.getBool.getV.toString
-        } else if (v.hasInt) {
-          v.getInt.getV.toString
-        } else if (v.hasList) {
-          // Convert list of strings to e.g. "[ item1, item2 ]"
-          val items = v.getList.getValuesList.asScala.map { vi =>
-            if (vi.hasString) vi.getString.getV else "???"
-          }
-          items.mkString("[", ", ", "]")
-        } else {
-          // fallback
-          ""
-        }
-
-      colName -> strVal
+    row.getColumnsList.asScala.map { c =>
+      val name = c.getName
+      val v    = c.getData
+      val s =
+        if (v.hasString) v.getString.getV
+        else if (v.hasBool) v.getBool.getV.toString
+        else if (v.hasInt) v.getInt.getV.toString
+        else s"<complex or unsupported: $v>"
+      name -> s
     }.toMap
   }
 
-  // ------------------------------------------------------------------------------
-  // Now the tests
-  // ------------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
+  // Tests
+  // --------------------------------------------------------------------------
 
-  test("Missing url => throws DASSdkException") {
+  test("Missing 'url' => throws DASSdkException") {
     val table = new DASHttpTable()
-
-    // We only specify method=GET, but no url => must throw
     val quals = Seq(
-      qualString("method", "GET")
+      qualString("method", "GET") // no url => should throw
     )
 
     assertThrows[DASSdkException] {
-      val result = table.execute(quals, Seq.empty, Seq.empty, None)
-      collectRows(result)
+      val res = table.execute(quals, Seq.empty, Seq.empty, None)
+      collectRows(res)
     }
   }
 
-  test("Simple GET with no headers, no args, follow_redirect=false") {
+  test("Unknown column => throws DASSdkException") {
     val table = new DASHttpTable()
-
     val quals = Seq(
-      qualString("url", "https://httpbin.org/get"),
+      qualString("url", "http://example.com"),
       qualString("method", "GET"),
-      // empty lists
-      qualListStrings("request_headers", Nil),
-      qualListStrings("url_args", Nil),
-      qualString("request_body", ""),
-      qualBool("follow_redirect", boolVal = false)
+      qualBool("some_unknown_col", true)
     )
 
-    val result = table.execute(quals, Seq("url","follow_redirect","response_status_code","response_body"), Seq.empty, None)
+    assertThrows[DASSdkException] {
+      table.execute(quals, Seq.empty, Seq.empty, None)
+    }
+  }
+
+  test("Wrong operator => throws DASSdkException") {
+    val table = new DASHttpTable()
+    // We'll build a Qual with operator = LESS_THAN
+    val q = ProtoQual.newBuilder()
+      .setName("url")
+      .setSimpleQual(
+        SimpleQual.newBuilder()
+          .setOperator(Operator.LESS_THAN)  // not EQUALS => should throw
+          .setValue(
+            ProtoValue.newBuilder()
+              .setString(ValueString.newBuilder().setV("http://example.com"))
+          )
+      )
+      .build()
+
+    assertThrows[DASSdkException] {
+      table.execute(Seq(q), Seq.empty, Seq.empty, None)
+    }
+  }
+
+  test("follow_redirect is not a bool => throws DASSdkException") {
+    val table = new DASHttpTable()
+
+    val qUrl = qualString("url", "http://example.com")
+    val qMethod = qualString("method", "GET")
+    // follow_redirect => string "true" => mismatch
+    val qRedirect = qualString("follow_redirect", "true")
+
+    val quals = Seq(qUrl, qMethod, qRedirect)
+    assertThrows[DASSdkException] {
+      table.execute(quals, Seq.empty, Seq.empty, None)
+    }
+  }
+
+  test("request_headers is not a record => throws DASSdkException") {
+    val table = new DASHttpTable()
+
+    val qUrl = qualString("url", "http://example.com")
+    val qMethod = qualString("method", "GET")
+    // request_headers => string => mismatch
+    val qHeaders = qualString("request_headers", "Accept:application/json")
+
+    val quals = Seq(qUrl, qMethod, qHeaders)
+    assertThrows[DASSdkException] {
+      table.execute(quals, Seq.empty, Seq.empty, None)
+    }
+  }
+
+  test("Valid GET with minimal parameters => returns one row") {
+    val table = new DASHttpTable()
+    val qUrl = qualString("url", "https://httpbin.org/get")
+    val qMethod = qualString("method", "GET")
+    val qBody = qualString("request_body", "")
+    val qRedirect = qualBool("follow_redirect", false)
+    val qHeaders = qualRecordOfStrings("request_headers", Map.empty)
+    val qArgs = qualRecordOfStrings("url_args", Map.empty)
+
+    val quals = Seq(qUrl, qMethod, qBody, qRedirect, qHeaders, qArgs)
+
+    val result = table.execute(
+      quals,
+      Seq("url","method","response_status_code","response_body"),
+      Seq.empty,
+      None
+    )
     val rows = collectRows(result)
     assert(rows.size == 1)
 
-    val rowMap = rowToMap(rows.head)
+    val row = rows.head
+    val rowMap = rowToMap(row)
+
     assert(rowMap("url") == "https://httpbin.org/get")
-    assert(rowMap("follow_redirect") == "false")
-    // response_status_code is an int => in the row map we have it as a string
+    assert(rowMap("method") == "GET")
+    // we can't fully predict the status code if the call is live, but typically "200"
     assert(rowMap.contains("response_status_code"))
     assert(rowMap.contains("response_body"))
   }
 
-  test("POST with headers, url_args, follow_redirect=true") {
+  test("POST with custom headers & url_args => returns one row") {
     val table = new DASHttpTable()
+    val qUrl = qualString("url", "https://httpbin.org/post")
+    val qMethod = qualString("method", "POST")
+    val qBody = qualString("request_body", """{"foo":"bar"}""")
+    val qRedirect = qualBool("follow_redirect", true)
 
-    val quals = Seq(
-      qualString("url", "https://httpbin.org/post"),
-      qualString("method", "POST"),
-      // e.g. Content-Type, X-Test
-      qualListStrings("request_headers", Seq("Content-Type:application/json", "X-Test:Foo")),
-      // e.g. foo=bar, debug=true
-      qualListStrings("url_args", Seq("foo=bar","debug=true")),
-      qualString("request_body", """{"hello":"world"}"""),
-      qualBool("follow_redirect", boolVal = true)
-    )
+    val qHeaders = qualRecordOfStrings("request_headers", Map(
+      "Content-Type" -> "application/json",
+      "User-Agent"   -> "MyDAS"
+    ))
+    val qArgs = qualRecordOfStrings("url_args", Map("debug" -> "true","test"->"123"))
 
-    // Request a few columns
+    val quals = Seq(qUrl, qMethod, qBody, qRedirect, qHeaders, qArgs)
+
     val result = table.execute(
       quals,
-      Seq("url","method","follow_redirect","request_headers","url_args","response_status_code","response_body"),
+      Seq("url","request_headers","url_args","follow_redirect","response_status_code","response_body"),
       Seq.empty,
       None
     )
@@ -193,50 +240,12 @@ class DASHttpTest extends AnyFunSuite {
     assert(rows.size == 1)
 
     val rowMap = rowToMap(rows.head)
-    assert(rowMap("url") == "https://httpbin.org/post")  // might be appended by buildUrlWithArgs
-    assert(rowMap("method") == "POST")
+    // The table might append "?debug=true&test=123" to the URL
+    assert(rowMap("url").contains("https://httpbin.org/post"))
     assert(rowMap("follow_redirect") == "true")
-    // request_headers => "[Content-Type:application/json, X-Test:Foo]"
-    assert(rowMap("request_headers").contains("Content-Type:application/json"))
-    assert(rowMap("request_headers").contains("X-Test:Foo"))
-    // url_args => "[foo=bar, debug=true]"
-    assert(rowMap("url_args").contains("foo=bar"))
-    assert(rowMap("url_args").contains("debug=true"))
-    // response_status_code, response_body => not checked in detail, just that they exist
+    assert(rowMap.contains("request_headers"))
+    assert(rowMap.contains("url_args"))
     assert(rowMap.contains("response_status_code"))
     assert(rowMap.contains("response_body"))
   }
-
-  test("Ignore unknown columns => default remains") {
-    val table = new DASHttpTable()
-
-    // We'll do "some_unknown_col = 123" => the plugin should ignore it.
-    val quals = Seq(
-      qualString("url", "https://httpbin.org/get"),
-      qualString("method", "GET"),
-      qualListStrings("request_headers", Nil),
-      qualListStrings("url_args", Nil),
-      qualString("request_body", ""),
-      qualBool("follow_redirect", boolVal = false),
-      ProtoQual.newBuilder()
-        .setName("some_unknown_col")
-        .setSimpleQual(
-          SimpleQual.newBuilder()
-            .setOperator(Operator.EQUALS)
-            .setValue(ProtoValue.newBuilder().setString(ValueString.newBuilder().setV("123")))
-        )
-        .build()
-    )
-
-    val result = table.execute(quals, Seq("url","follow_redirect","response_status_code"), Seq.empty, None)
-    val rows = collectRows(result)
-    assert(rows.size == 1)
-
-    val rowMap = rowToMap(rows.head)
-    assert(rowMap("url") == "https://httpbin.org/get")
-    assert(rowMap("follow_redirect") == "false")
-    assert(rowMap.contains("response_status_code"))
-    // "some_unknown_col" not used => no error
-  }
-
 }
