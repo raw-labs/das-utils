@@ -174,28 +174,22 @@ class DASHttpTableTest extends AnyFunSuite {
     }
   }
 
-  test("Valid GET with minimal parameters => returns one row") {
+  test("GET method with args => success") {
     val table = new DASHttpTable()
-    val qUrl = qualString("url", "https://httpbin.org/get")
     val qMethod = qualString("method", "GET")
-    val qBody = qualString("request_body", "")
-    val qRedirect = qualBool("follow_redirect", false)
-    val qHeaders = qualRecordOfStrings("request_headers", Map.empty)
-    val qArgs = qualRecordOfStrings("url_args", Map.empty)
+    val qUrl = qualString("url", "https://httpbin.org/get")
+    // get method without args is returning a 502 error
+    val qArgs = qualRecordOfStrings("url_args", Map("debug" -> "true", "test" -> "123"))
 
-    val quals = Seq(qUrl, qMethod, qBody, qRedirect, qHeaders, qArgs)
-
-    val result = table.execute(quals, Seq("url", "method", "response_status_code", "response_body"), Seq.empty, None)
+    val quals = Seq(qUrl, qMethod, qArgs)
+    val result = table.execute(quals, Seq("method", "response_status_code", "response_body"), Seq.empty, None)
     val rows = collectRows(result)
     assert(rows.size == 1)
 
-    val row = rows.head
-    val rowMap = rowToMap(row)
-
-    assert(rowMap("url") == "https://httpbin.org/get")
+    val rowMap = rowToMap(rows.head)
     assert(rowMap("method") == "GET")
-    // we can't fully predict the status code if the call is live, but typically "200"
     assert(rowMap.contains("response_status_code"))
+    assert(rowMap("response_status_code") == "200")
     assert(rowMap.contains("response_body"))
   }
 
@@ -227,6 +221,129 @@ class DASHttpTableTest extends AnyFunSuite {
     assert(rowMap.contains("request_headers"))
     assert(rowMap.contains("url_args"))
     assert(rowMap.contains("response_status_code"))
+    assert(rowMap("response_status_code") == "200")
     assert(rowMap.contains("response_body"))
+
+  }
+
+  test("DELETE method => success") {
+    val table = new DASHttpTable()
+    val qMethod = qualString("method", "DELETE")
+    val qUrl = qualString("url", "https://httpbin.org/delete")
+
+    val quals = Seq(qUrl, qMethod)
+    val result = table.execute(quals, Seq("method", "response_status_code", "response_body"), Seq.empty, None)
+    val rows = collectRows(result)
+    assert(rows.size == 1)
+
+    val rowMap = rowToMap(rows.head)
+    assert(rowMap("method") == "DELETE")
+    // Possibly 200 or 204 if the endpoint simulates DELETE
+    assert(rowMap.contains("response_status_code"))
+    assert(rowMap("response_status_code") == "200")
+    assert(rowMap.contains("response_body"))
+  }
+
+  test("POST method => success") {
+    val table = new DASHttpTable()
+    val qMethod = qualString("method", "POST")
+    val qUrl = qualString("url", "https://httpbin.org/post")
+    val qBody = qualString("request_body", """{"foo":"bar"}""")
+
+    val quals = Seq(qUrl, qMethod, qBody)
+    val result = table.execute(quals, Seq("method", "response_status_code", "response_body"), Seq.empty, None)
+    val rows = collectRows(result)
+    assert(rows.size == 1)
+
+    val rowMap = rowToMap(rows.head)
+    assert(rowMap("method") == "POST")
+    assert(rowMap.contains("response_status_code"))
+    assert(rowMap("response_status_code") == "200")
+    assert(rowMap.contains("response_body"))
+  }
+
+  test("PUT method => success") {
+    val table = new DASHttpTable()
+    val qMethod = qualString("method", "PUT")
+    val qUrl = qualString("url", "https://httpbin.org/put")
+    val qBody = qualString("request_body", """{"foo":"bar"}""")
+    // put method without args is returning a 502 error
+    val qArgs = qualRecordOfStrings("url_args", Map("debug" -> "true", "test" -> "123"))
+
+    val quals = Seq(qUrl, qMethod, qBody, qArgs)
+    val result = table.execute(quals, Seq("method", "response_status_code", "response_body"), Seq.empty, None)
+    val rows = collectRows(result)
+    assert(rows.size == 1)
+
+    val rowMap = rowToMap(rows.head)
+    assert(rowMap("method") == "PUT")
+    assert(rowMap.contains("response_status_code"))
+    assert(rowMap("response_status_code") == "200")
+    assert(rowMap.contains("response_body"))
+  }
+
+  test("PATCH method => success") {
+    val table = new DASHttpTable()
+    val qMethod = qualString("method", "PATCH")
+    val qUrl = qualString("url", "https://httpbin.org/patch")
+    val qBody = qualString("request_body", """{"foo":"bar"}""")
+
+    val quals = Seq(qUrl, qMethod, qBody)
+    val result = table.execute(quals, Seq("method", "response_status_code", "response_body"), Seq.empty, None)
+    val rows = collectRows(result)
+    assert(rows.size == 1)
+
+    val rowMap = rowToMap(rows.head)
+    assert(rowMap("method") == "PATCH")
+    assert(rowMap.contains("response_status_code"))
+    assert(rowMap("response_status_code") == "200")
+    assert(rowMap.contains("response_body"))
+  }
+
+  test("HEAD method => success") {
+    val table = new DASHttpTable()
+    val qMethod = qualString("method", "HEAD")
+    val qUrl = qualString("url", "https://httpbin.org/anything")
+
+    val quals = Seq(qUrl, qMethod)
+    val result = table.execute(quals, Seq("method", "response_status_code", "response_body"), Seq.empty, None)
+    val rows = collectRows(result)
+    assert(rows.size == 1)
+
+    val rowMap = rowToMap(rows.head)
+    assert(rowMap("method") == "HEAD")
+    assert(rowMap.contains("response_status_code"))
+    assert(rowMap("response_status_code") == "200")
+    assert(rowMap.contains("response_body"))
+  }
+
+  test("OPTIONS method => success") {
+    val table = new DASHttpTable()
+    val qMethod = qualString("method", "OPTIONS")
+    val qUrl = qualString("url", "https://httpbin.org/anything")
+    val qBody = qualString("request_body", """{"foo":"bar"}""")
+
+    val quals = Seq(qUrl, qMethod, qBody)
+    val result = table.execute(quals, Seq("method", "response_status_code", "response_body"), Seq.empty, None)
+    val rows = collectRows(result)
+    assert(rows.size == 1)
+
+    val rowMap = rowToMap(rows.head)
+    assert(rowMap("method") == "OPTIONS")
+    assert(rowMap.contains("response_status_code"))
+    assert(rowMap("response_status_code") == "200")
+    assert(rowMap.contains("response_body"))
+  }
+
+  test("Unknown method => throw DASSdkException") {
+    val table = new DASHttpTable()
+    val qMethod = qualString("method", "FOOBAR")
+    val qUrl = qualString("url", "https://httpbin.org/anything")
+
+    val quals = Seq(qUrl, qMethod)
+    assertThrows[DASSdkException] {
+      val result = table.execute(quals, Seq.empty, Seq.empty, None)
+      collectRows(result)
+    }
   }
 }

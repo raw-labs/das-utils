@@ -117,10 +117,15 @@ class DASHttpTable extends DASTable {
 
     // 5) Create request
     val requestBuilder = HttpRequest.newBuilder().uri(URI.create(finalUrl))
-    method match {
-      case "POST" => requestBuilder.POST(HttpRequest.BodyPublishers.ofString(body))
-      case "PUT"  => requestBuilder.PUT(HttpRequest.BodyPublishers.ofString(body))
-      case _      => requestBuilder.GET()
+    method.toUpperCase match {
+      case "GET"     => requestBuilder.GET()
+      case "DELETE"  => requestBuilder.DELETE()
+      case "POST"    => requestBuilder.POST(HttpRequest.BodyPublishers.ofString(body))
+      case "PUT"     => requestBuilder.PUT(HttpRequest.BodyPublishers.ofString(body))
+      case "PATCH"   => requestBuilder.method("PATCH", HttpRequest.BodyPublishers.ofString(body))
+      case "HEAD"    => requestBuilder.HEAD()
+      case "OPTIONS" => requestBuilder.method("OPTIONS", HttpRequest.BodyPublishers.ofString(body))
+      case unknown   => throw new DASSdkException(s"Unsupported HTTP method: $unknown")
     }
 
     // 6) Add request headers
