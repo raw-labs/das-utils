@@ -12,8 +12,7 @@ ThisBuild / credentials += Credentials(
   "GitHub Package Registry",
   "maven.pkg.github.com",
   "raw-labs",
-  sys.env.getOrElse("GITHUB_TOKEN", "")
-)
+  sys.env.getOrElse("GITHUB_TOKEN", ""))
 
 // -----------------------------------------------------------------------------
 // Common & Build Settings
@@ -24,8 +23,7 @@ lazy val commonSettings = Seq(
   organizationName := "RAW Labs SA",
   organizationHomepage := Some(url("https://www.raw-labs.com/")),
   updateOptions := updateOptions.in(Global).value.withCachedResolution(true),
-  resolvers += "RAW Labs GitHub Packages" at "https://maven.pkg.github.com/raw-labs/_"
-)
+  resolvers += "RAW Labs GitHub Packages" at "https://maven.pkg.github.com/raw-labs/_")
 
 lazy val buildSettings = Seq(
   scalaVersion := "2.13.15",
@@ -38,9 +36,7 @@ lazy val buildSettings = Seq(
     "-Ywarn-dead-code",
     "-Ywarn-macros:after",
     "-Ypatmat-exhaust-depth",
-    "160"
-  )
-)
+    "160"))
 
 lazy val compileSettings = Seq(
   Compile / doc / sources := Seq.empty,
@@ -48,10 +44,8 @@ lazy val compileSettings = Seq(
   Compile / packageSrc / publishArtifact := true,
   Compile / packageDoc / publishArtifact := false,
   Compile / packageBin / packageOptions += Package.ManifestAttributes(
-    "Automatic-Module-Name" -> name.value.replace('-', '.')
-  ),
-  compileOrder := CompileOrder.JavaThenScala
-)
+    "Automatic-Module-Name" -> name.value.replace('-', '.')),
+  compileOrder := CompileOrder.JavaThenScala)
 
 // -----------------------------------------------------------------------------
 // Test Settings
@@ -70,10 +64,8 @@ lazy val testSettings = Seq(
   },
   Test / javaOptions ++= Seq(
     "-XX:+HeapDumpOnOutOfMemoryError",
-    s"-XX:HeapDumpPath=${Paths.get(sys.env.getOrElse("SBT_FORK_OUTPUT_DIR", "target/test-results")).resolve("heap-dumps")}"
-  ),
-  Test / publishArtifact := true
-)
+    s"-XX:HeapDumpPath=${Paths.get(sys.env.getOrElse("SBT_FORK_OUTPUT_DIR", "target/test-results")).resolve("heap-dumps")}"),
+  Test / publishArtifact := true)
 
 // -----------------------------------------------------------------------------
 // Publish Settings
@@ -86,14 +78,11 @@ lazy val publishSettings = Seq(
   publishMavenStyle := true,
   // Point to a new GitHub repo for "das-http", for example:
   publishTo := Some("GitHub raw-labs Apache Maven Packages" at "https://maven.pkg.github.com/raw-labs/das-http"),
-  publishConfiguration := publishConfiguration.value.withOverwrite(isCI)
-)
+  publishConfiguration := publishConfiguration.value.withOverwrite(isCI))
 
 // Consolidate everything into strict build settings
 lazy val strictBuildSettings =
-  commonSettings ++ compileSettings ++ buildSettings ++ testSettings ++ Seq(
-    scalacOptions ++= Seq("-Xfatal-warnings")
-  )
+  commonSettings ++ compileSettings ++ buildSettings ++ testSettings ++ Seq(scalacOptions ++= Seq("-Xfatal-warnings"))
 
 // -----------------------------------------------------------------------------
 // Main Project: "das-http"
@@ -105,12 +94,10 @@ lazy val root = (project in file("."))
     publishSettings,
     libraryDependencies ++= Seq(
       // RAW Labs DAS & Protocol
-      "com.raw-labs" %% "das-server-scala" % "0.3.0" % "compile->compile;test->test",
-      "com.raw-labs" %% "protocol-das"    % "1.0.0"  % "compile->compile;test->test",
+      "com.raw-labs" %% "das-server-scala" % "0.3.2" % "compile->compile;test->test",
+      "com.raw-labs" %% "protocol-das" % "1.0.0" % "compile->compile;test->test",
       // ScalaTest for unit tests
-      "org.scalatest" %% "scalatest" % "3.2.19" % "test"
-    )
-  )
+      "org.scalatest" %% "scalatest" % "3.2.19" % "test"))
 
 // -----------------------------------------------------------------------------
 // Docker Project: builds a Docker image for the DAS server
@@ -127,8 +114,7 @@ lazy val dockerSettings = strictBuildSettings ++ Seq(
     "product" -> "das-http-server",
     "image-type" -> "final",
     // Update the repo URL below to match your actual GitHub repository for "das-http"
-    "org.opencontainers.image.source" -> "https://github.com/raw-labs/das-http"
-  ),
+    "org.opencontainers.image.source" -> "https://github.com/raw-labs/das-http"),
   Docker / daemonUser := "raw",
   dockerExposedVolumes := Seq("/var/log/raw"),
   dockerExposedPorts := Seq(50051),
@@ -149,10 +135,8 @@ lazy val dockerSettings = strictBuildSettings ++ Seq(
       && dpkg --install $amzn_corretto_bin \\
       && rm -f $amzn_corretto_bin \\
       && apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false \\
-         wget gnupg software-properties-common"""
-    ),
-    Cmd("USER", "raw")
-  ),
+         wget gnupg software-properties-common"""),
+    Cmd("USER", "raw")),
   dockerEnvVars += "LANG" -> "C.UTF-8",
   dockerEnvVars += "JAVA_HOME" -> "/usr/lib/jvm/java-21-amazon-corretto",
   Compile / doc / sources := Seq.empty,
@@ -196,8 +180,7 @@ lazy val dockerSettings = strictBuildSettings ++ Seq(
       case Some(releaseReg) => Seq(baseAlias, dockerAlias.value.withRegistryHost(Some(releaseReg)))
       case None             => Seq(baseAlias)
     }
-  }
-)
+  })
 
 // -----------------------------------------------------------------------------
 // Aggregate Docker Project
@@ -208,5 +191,4 @@ lazy val docker = (project in file("docker"))
   .settings(
     strictBuildSettings,
     dockerSettings,
-    libraryDependencies += "com.raw-labs" %% "das-server-scala" % "0.3.0" % "compile->compile;test->test"
-  )
+    libraryDependencies += "com.raw-labs" %% "das-server-scala" % "0.3.0" % "compile->compile;test->test")
