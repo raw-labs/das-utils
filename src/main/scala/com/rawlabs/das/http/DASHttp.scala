@@ -35,7 +35,7 @@ class DASHttp extends DASSdk {
    * If the user queries "net_http_request", return our single table. Otherwise, None.
    */
   override def getTable(name: String): Option[DASHttpTable] =
-    if (name == "net_http_request") Some(httpTable) else None
+    if (name == "http_request") Some(httpTable) else None
 
   // No functions to retrieve
   override def getFunction(name: String): Option[DASFunction] = None

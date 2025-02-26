@@ -43,11 +43,15 @@ class DASHttpTable extends DASTable {
     "url_args" -> mkRecordType(),
     "request_body" -> mkStringType(),
     "follow_redirect" -> mkBoolType(),
+    "connect_timeout_millis" -> mkIntType(),
+    "request_timeout_millis" -> mkIntType(),
+    "ssl_trust_all" -> mkBoolType(),
     // Output columns
     "response_status_code" -> mkIntType(),
-    "response_body" -> mkStringType())
+    "response_body" -> mkStringType(),
+    "response_headers" -> mkRecordType())
 
-  private val tableName = "net_http_request"
+  private val tableName = "http_request"
 
   /** Build a TableDefinition from the columns above. */
   val tableDefinition: TableDefinition = {
@@ -67,7 +71,7 @@ class DASHttpTable extends DASTable {
   }
 
   override def getTablePathKeys: Seq[PathKey] = Seq.empty
-  override def getTableSortOrders(sortKeys: Seq[SortKey]): Seq[SortKey] = sortKeys
+  override def getTableSortOrders(sortKeys: Seq[SortKey]): Seq[SortKey] = Seq.empty
 
   override def tableEstimate(quals: Seq[Qual], columns: Seq[String]): DASTable.TableEstimate = {
     // Single HTTP request => single row
@@ -97,81 +101,113 @@ class DASHttpTable extends DASTable {
     val url = params.url.getOrElse {
       throw new DASSdkException("Missing 'url' in WHERE clause")
     }
+
     val method = params.method.getOrElse("GET").toUpperCase
     val requestHeaders = params.requestHeaders.getOrElse(Map.empty)
     val urlArgs = params.urlArgs.getOrElse(Map.empty)
     val body = params.requestBody.getOrElse("")
     val followRedirect = params.followRedirect.getOrElse(false)
+    val connectTimeoutMillis = params.connectTimeoutMillis.getOrElse(5000)
+    val requestTimeoutMillis = params.requestTimeoutMillis.getOrElse(30000)
+    val sslTrustAll = params.sslTrustAll.getOrElse(false)
 
-    // 3) Build HttpClient
-    val client = {
-      val b = HttpClient.newBuilder()
-      if (followRedirect) b.followRedirects(HttpClient.Redirect.ALWAYS)
-      else b.followRedirects(HttpClient.Redirect.NEVER)
-      b.build()
-    }
+    // 3) Build HttpClient with connect timeout and optional SSL trust-all
+    val client = buildHttpClient(followRedirect, connectTimeoutMillis, sslTrustAll)
 
-    // 4) Construct the final URL with urlArgs if you like (like "?foo=bar&test=123").
-    //    Or you can handle them differently. For simplicity, let's assume we just do "baseUrl?arg1&arg2"
-    val finalUrl = buildUrlWithArgs(url, urlArgs)
+    try {
+      // 4) Construct the final URL with urlArgs if you like (like "?foo=bar&test=123").
+      //    Or you can handle them differently. For simplicity, let's assume we just do "baseUrl?arg1&arg2"
+      val finalUrl = buildUrlWithArgs(url, urlArgs)
 
-    // 5) Create request
-    val requestBuilder = HttpRequest.newBuilder().uri(URI.create(finalUrl))
-    method.toUpperCase match {
-      case "GET"     => requestBuilder.GET()
-      case "DELETE"  => requestBuilder.DELETE()
-      case "POST"    => requestBuilder.POST(HttpRequest.BodyPublishers.ofString(body))
-      case "PUT"     => requestBuilder.PUT(HttpRequest.BodyPublishers.ofString(body))
-      case "PATCH"   => requestBuilder.method("PATCH", HttpRequest.BodyPublishers.ofString(body))
-      case "HEAD"    => requestBuilder.HEAD()
-      case "OPTIONS" => requestBuilder.method("OPTIONS", HttpRequest.BodyPublishers.ofString(body))
-      case unknown   => throw new DASSdkException(s"Unsupported HTTP method: $unknown")
-    }
+      // 5) Create request
+      val requestBuilder =
+        try {
+          HttpRequest.newBuilder().uri(URI.create(finalUrl))
+        } catch {
+          case ex: IllegalArgumentException =>
+            throw new DASSdkException(s"Invalid url: ${ex.getMessage}", ex)
+        }
 
-    // 6) Add request headers
-    requestHeaders.foreach { case (k, v) => requestBuilder.header(k, v) }
+      requestBuilder.timeout(java.time.Duration.ofMillis(requestTimeoutMillis))
 
-    // 7) Send
-    val response = client.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString())
-    val statusCode = response.statusCode()
-    val respBody = response.body()
-
-    // 8) Build a single row with all columns
-    val rowBuilder = ProtoRow.newBuilder()
-
-    // If the user didn't request any columns, we default to returning all. Or
-    // if columnsRequested is empty, let's say we return them all anyway.
-    val wantedCols = if (columnsRequested.isEmpty) columns.map(_._1) else columnsRequested
-
-    // Convert everything into a Map of col -> Value
-    val colValues: Map[String, Value] = Map(
-      "url" -> mkStringValue(url),
-      "method" -> mkStringValue(method),
-      "request_headers" -> mkRecordValue(requestHeaders),
-      "url_args" -> mkRecordValue(urlArgs),
-      "request_body" -> mkStringValue(body),
-      "follow_redirect" -> Value.newBuilder().setBool(ValueBool.newBuilder().setV(followRedirect)).build(),
-      "response_status_code" -> Value.newBuilder().setInt(ValueInt.newBuilder().setV(statusCode)).build(),
-      "response_body" -> mkStringValue(respBody))
-
-    // Add them if in wantedCols
-    columns.foreach { case (colName, _) =>
-      if (wantedCols.contains(colName)) {
-        val valObj = colValues.getOrElse(colName, mkStringValue(""))
-        rowBuilder.addColumns(
-          ProtoColumn
-            .newBuilder()
-            .setName(colName)
-            .setData(valObj))
+      method.toUpperCase match {
+        case "GET"     => requestBuilder.GET()
+        case "DELETE"  => requestBuilder.DELETE()
+        case "POST"    => requestBuilder.POST(HttpRequest.BodyPublishers.ofString(body))
+        case "PUT"     => requestBuilder.PUT(HttpRequest.BodyPublishers.ofString(body))
+        case "PATCH"   => requestBuilder.method("PATCH", HttpRequest.BodyPublishers.ofString(body))
+        case "HEAD"    => requestBuilder.HEAD()
+        case "OPTIONS" => requestBuilder.method("OPTIONS", HttpRequest.BodyPublishers.ofString(body))
+        case unknown   => throw new DASSdkException(s"Unsupported HTTP method: $unknown")
       }
-    }
 
-    val rowIter = Iterator(rowBuilder.build())
+      // 6) Add request headers
+      requestHeaders.foreach { case (k, v) => requestBuilder.header(k, v) }
 
-    new DASExecuteResult {
-      override def hasNext: Boolean = rowIter.hasNext
-      override def next(): ProtoRow = rowIter.next()
-      override def close(): Unit = {}
+      // 7) Send
+      val response = client.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString())
+      val statusCode = response.statusCode()
+      val respBody = response.body()
+
+      // 8) Build a single row with all columns
+      val rowBuilder = ProtoRow.newBuilder()
+
+      // If the user didn't request any columns, we default to returning all. Or
+      // if columnsRequested is empty, let's say we return them all anyway.
+      val wantedCols = if (columnsRequested.isEmpty) columns.map(_._1) else columnsRequested
+
+      // Convert everything into a Map of col -> Value
+      val colValues: Map[String, Value] = Map(
+        "url" -> mkStringValue(url),
+        "method" -> mkStringValue(method),
+        "request_headers" -> mkRecordValue(requestHeaders),
+        "url_args" -> mkRecordValue(urlArgs),
+        "request_body" -> mkStringValue(body),
+        "follow_redirect" -> Value.newBuilder().setBool(ValueBool.newBuilder().setV(followRedirect)).build(),
+        "response_status_code" -> Value.newBuilder().setInt(ValueInt.newBuilder().setV(statusCode)).build(),
+        "response_body" -> mkStringValue(respBody),
+        "response_headers" -> mkRecordValue(
+          // flatten header values into a single string
+          response.headers().map().asScala.map { case (key, values) => key -> values.asScala.mkString(",") }.toMap))
+
+      // Add them if in wantedCols
+      columns.foreach { case (colName, _) =>
+        if (wantedCols.contains(colName)) {
+          val valObj = colValues.getOrElse(colName, mkStringValue(""))
+          rowBuilder.addColumns(
+            ProtoColumn
+              .newBuilder()
+              .setName(colName)
+              .setData(valObj))
+        }
+      }
+
+      val rowIter = Iterator(rowBuilder.build())
+
+      new DASExecuteResult {
+        override def hasNext: Boolean = rowIter.hasNext
+
+        override def next(): ProtoRow = rowIter.next()
+
+        override def close(): Unit = {}
+      }
+
+    } catch {
+      case ex: java.net.http.HttpTimeoutException =>
+        throw new DASSdkException(s"Request timed out: ${ex.getMessage}", ex)
+      case ex: java.net.UnknownHostException =>
+        throw new DASSdkException(s"Unknown host: ${ex.getMessage}", ex)
+      case ex: java.net.ConnectException =>
+        throw new DASSdkException(s"Connection error: ${ex.getMessage}", ex)
+      case ex: javax.net.ssl.SSLException =>
+        throw new DASSdkException(s"SSL error: ${ex.getMessage}", ex)
+      case ex: java.io.IOException =>
+        throw new DASSdkException(s"Network I/O error: ${ex.getMessage}", ex)
+      case ex: IllegalArgumentException =>
+        // e.g., malformed URL or invalid arguments
+        throw new DASSdkException(s"Invalid request parameter: ${ex.getMessage}", ex)
+    } finally {
+      client.close()
     }
   }
 
@@ -183,6 +219,43 @@ class DASHttpTable extends DASTable {
   override def delete(rowId: Value): Unit =
     throw new DASSdkException("HTTP single-table is read-only.")
 
+  /**
+   * Helper to build an HttpClient with connect-timeout, SSL trust-all, and redirect handling.
+   */
+  private def buildHttpClient(followRedirect: Boolean, connectTimeoutMillis: Int, sslTrustAll: Boolean): HttpClient = {
+    val builder = HttpClient.newBuilder()
+
+    // Follow redirects if set
+    if (followRedirect) builder.followRedirects(HttpClient.Redirect.ALWAYS)
+    else builder.followRedirects(HttpClient.Redirect.NEVER)
+
+    // Connect timeout
+    builder.connectTimeout(java.time.Duration.ofMillis(connectTimeoutMillis))
+
+    // SSL trust all
+    if (sslTrustAll) {
+      import java.security.SecureRandom
+      import java.security.cert.X509Certificate
+      import javax.net.ssl._
+
+      val trustAllCerts = Array[TrustManager](new X509TrustManager {
+        override def checkClientTrusted(chain: Array[X509Certificate], authType: String): Unit = {}
+        override def checkServerTrusted(chain: Array[X509Certificate], authType: String): Unit = {}
+        override def getAcceptedIssuers: Array[X509Certificate] = Array.empty
+      })
+
+      val sslContext = SSLContext.getInstance("TLS")
+      sslContext.init(null, trustAllCerts, new SecureRandom())
+      builder.sslContext(sslContext)
+
+      // also disable hostname verification
+      val noVerification = new SSLParameters()
+      noVerification.setEndpointIdentificationAlgorithm(null)
+      builder.sslParameters(noVerification)
+    }
+
+    builder.build()
+  }
   // --------------------------------------------------------------------------------
   // Helper: parse typed columns from Quals
   // --------------------------------------------------------------------------------
@@ -196,12 +269,10 @@ class DASHttpTable extends DASTable {
       requestHeaders: Option[Map[String, String]] = None,
       urlArgs: Option[Map[String, String]] = None,
       requestBody: Option[String] = None,
-      followRedirect: Option[Boolean] = None)
-
-  /**
-   * parseQuals converts Quals to typed fields. We only handle "operator = EQUALS", and we check the underlying Value's
-   * type (string vs list vs bool).
-   */
+      followRedirect: Option[Boolean] = None,
+      connectTimeoutMillis: Option[Int] = None,
+      requestTimeoutMillis: Option[Int] = None,
+      sslTrustAll: Option[Boolean] = None)
 
   /**
    * parseQuals converts Quals to typed fields. We only handle operator == EQUALS, and we check the Value's type
@@ -252,6 +323,21 @@ class DASHttpTable extends DASTable {
           }
           result = result.copy(followRedirect = Some(v.getBool.getV))
 
+        case "connect_timeout_millis" =>
+          if (!v.hasInt) {
+            throw new DASSdkException("Column 'connect_timeout_millis' must be an integer value.")
+          }
+          result = result.copy(connectTimeoutMillis = Some(v.getInt.getV))
+        case "request_timeout_millis" =>
+          if (!v.hasInt) {
+            throw new DASSdkException("Column 'request_timeout_millis' must be an integer value.")
+          }
+          result = result.copy(requestTimeoutMillis = Some(v.getInt.getV))
+        case "ssl_trust_all" =>
+          if (!v.hasBool) {
+            throw new DASSdkException("Column 'ssl_trust_all' must be a boolean value.")
+          }
+          result = result.copy(sslTrustAll = Some(v.getBool.getV))
         case "request_headers" =>
           if (!v.hasRecord) {
             throw new DASSdkException("Column 'request_headers' must be a record.")
