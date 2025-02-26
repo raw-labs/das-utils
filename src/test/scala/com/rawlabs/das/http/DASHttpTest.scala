@@ -19,7 +19,14 @@ import org.scalatest.funsuite.AnyFunSuite
 import com.rawlabs.das.sdk.DASSdkException
 import com.rawlabs.protocol.das.v1.query.{Operator, Qual => ProtoQual, SimpleQual}
 import com.rawlabs.protocol.das.v1.tables.{Row => ProtoRow}
-import com.rawlabs.protocol.das.v1.types.{Value => ProtoValue, ValueBool, ValueRecord, ValueRecordAttr, ValueString}
+import com.rawlabs.protocol.das.v1.types.{
+  Value => ProtoValue,
+  ValueBool,
+  ValueInt,
+  ValueRecord,
+  ValueRecordAttr,
+  ValueString
+}
 
 /**
  * Unit tests for DASHttpTable which:
@@ -52,6 +59,23 @@ class DASHttpTableTest extends AnyFunSuite {
     val boolValue = ProtoValue
       .newBuilder()
       .setBool(ValueBool.newBuilder().setV(boolVal))
+
+    ProtoQual
+      .newBuilder()
+      .setName(colName)
+      .setSimpleQual(
+        SimpleQual
+          .newBuilder()
+          .setOperator(Operator.EQUALS)
+          .setValue(boolValue))
+      .build()
+  }
+
+  // A helper method to create a SimpleQual with (column = boolValue)
+  private def qualInt(colName: String, intVal: Int): ProtoQual = {
+    val boolValue = ProtoValue
+      .newBuilder()
+      .setInt(ValueInt.newBuilder().setV(intVal))
 
     ProtoQual
       .newBuilder()
@@ -203,6 +227,20 @@ class DASHttpTableTest extends AnyFunSuite {
     assert(rowMap.contains("response_status_code"))
     assert(rowMap("response_status_code") == "200")
     assert(rowMap.contains("response_body"))
+  }
+
+  test("GET with connect-timeout 1 ms => fail") {
+    val table = new DASHttpTable()
+    val qMethod = qualString("method", "GET")
+    val qUrl = qualString("url", "https://httpbin.org/get")
+    val qConnectTimeout = qualInt("connect_timeout_millis", 1)
+
+    val quals = Seq(qUrl, qMethod, qConnectTimeout)
+    val ex = intercept[DASSdkException] {
+      table.execute(quals, Seq("method", "response_status_code", "response_body"), Seq.empty, None)
+    }
+
+    assert(ex.getMessage.contains("Request timed out:"))
   }
 
   test("POST with custom headers & url_args => returns one row") {
