@@ -146,6 +146,31 @@ class DASHttpTableTest extends AnyFunSuite {
       qualString("method", "GET") // no url => should throw
     )
 
+    val ex = intercept[DASSdkException] {
+      table.execute(quals, Seq.empty, Seq.empty, None)
+    }
+
+    assert(ex.getMessage.contains("Missing 'url'"))
+  }
+
+  test("malformed 'url' => throws DASSdkException") {
+    val table = new DASHttpTable()
+    val quals = Seq(
+      qualString("url", "not and url") // malformed url => should throw
+    )
+
+    assertThrows[DASSdkException] {
+      val res = table.execute(quals, Seq.empty, Seq.empty, None)
+      collectRows(res)
+    }
+  }
+
+  test("not supported scheme 'url' => throws DASSdkException") {
+    val table = new DASHttpTable()
+    val quals = Seq(
+      qualString("url", "file://path/file") // not supported scheme url => should throw
+    )
+
     assertThrows[DASSdkException] {
       val res = table.execute(quals, Seq.empty, Seq.empty, None)
       collectRows(res)

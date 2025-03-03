@@ -13,6 +13,9 @@
 package com.rawlabs.das.http
 import java.net.URI
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
+import javax.net.ssl._
 
 import scala.jdk.CollectionConverters._
 
@@ -234,10 +237,6 @@ class DASHttpTable extends DASTable {
 
     // SSL trust all
     if (sslTrustAll) {
-      import java.security.SecureRandom
-      import java.security.cert.X509Certificate
-      import javax.net.ssl._
-
       val trustAllCerts = Array[TrustManager](new X509TrustManager {
         override def checkClientTrusted(chain: Array[X509Certificate], authType: String): Unit = {}
         override def checkServerTrusted(chain: Array[X509Certificate], authType: String): Unit = {}
