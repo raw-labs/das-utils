@@ -40,7 +40,7 @@ WHERE
 | `request_timeout_millis` | The request timeout in milliseconds for the HTTP call. Defaults to 30s                                                    |
 | `ssl_trust_all`          | Trust all ssl certificates. Defaults to false.                                                                            |
 | `response_status_code`   | The integer status code returned by the HTTP call, as a string (e.g. "200")                                               |
-| `response_boody`         | The full response body as a string.                                                                                       |
+| `response_body`          | The full response body as a string.                                                                                       |
 | `response_headers`       | The response headers as a JSON object e.g.  e.g. `{"Content-length": "0"}`                                                |
 
 ## How to use
