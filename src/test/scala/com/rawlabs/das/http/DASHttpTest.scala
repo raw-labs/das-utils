@@ -13,7 +13,9 @@
 package com.rawlabs.das.http
 
 import java.net.http.HttpResponse.BodyHandler
-import java.net.http.{HttpClient, HttpHeaders, HttpRequest, HttpResponse}
+import java.net.http.{HttpClient, HttpHeaders, HttpRequest, HttpResponse, HttpTimeoutException}
+import java.net.{ConnectException, UnknownHostException}
+import javax.net.ssl.SSLException
 
 import scala.jdk.CollectionConverters._
 
@@ -163,11 +165,6 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
   }
 
   test("GET method with args => success") {
-
-    when(mockHttpResponse.body()).thenReturn("")
-    when(mockHttpResponse.statusCode()).thenReturn(200)
-    when(mockHttpResponse.headers()).thenReturn(mockHttpHeaders)
-
     val qMethod = qualString("method", "GET")
     val qUrl = qualString("url", "https://example.com/get")
     // get method without args is returning a 502 error
@@ -183,24 +180,6 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
     assert(rowMap.contains("response_status_code"))
     assert(rowMap("response_status_code") == "200")
     assert(rowMap.contains("response_body"))
-  }
-
-  test("GET with connect-timeout ") {
-    val qMethod = qualString("method", "GET")
-    val qUrl = qualString("url", "https://example.com/get")
-
-    when(mockClient.send(any[HttpRequest], any[HttpResponse.BodyHandler[String]])).thenAnswer { invocation =>
-      throw new java.net.http.HttpTimeoutException("Request timed out")
-    }
-
-    val qConnectTimeout = qualInt("connect_timeout_millis", 1)
-
-    val quals = Seq(qUrl, qMethod, qConnectTimeout)
-    val ex = intercept[DASSdkInvalidArgumentException] {
-      mockHttpTable.execute(quals, Seq("method", "response_status_code", "response_body"), Seq.empty, None)
-    }
-
-    assert(ex.getMessage.contains("Request timed out:"))
   }
 
   test("POST with custom headers & url_args => returns one row") {
@@ -347,6 +326,152 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
       val result = mockHttpTable.execute(quals, Seq.empty, Seq.empty, None)
       collectRows(result)
     }
+  }
+
+  test("Qual is not a simpleQual => throws DASSdkInvalidArgumentException") {
+    // Create a Qual that does NOT have a simpleQual (so q.hasSimpleQual == false)
+    val invalidQual = ProtoQual
+      .newBuilder()
+      .setName("url")
+      // Deliberately do NOT set .setSimpleQual(...)
+      .build()
+
+    val ex = intercept[DASSdkInvalidArgumentException] {
+      mockHttpTable.execute(Seq(invalidQual), Seq.empty, Seq.empty, None)
+    }
+
+    assert(ex.getMessage.contains("must be a simple equality"))
+  }
+
+  test("request_timeout_millis is not int => throws DASSdkInvalidArgumentException") {
+    // Provide a string value instead of an int
+    val qUrl = qualString("url", "http://example.com")
+    val qTimeout = qualString("request_timeout_millis", "notAnInt")
+
+    val ex = intercept[DASSdkInvalidArgumentException] {
+      mockHttpTable.execute(Seq(qUrl, qTimeout), Seq.empty, Seq.empty, None)
+    }
+    assert(ex.getMessage.contains("must be an integer value"))
+  }
+
+  test("ssl_trust_all is not bool => throws DASSdkInvalidArgumentException") {
+    val qUrl = qualString("url", "http://example.com")
+    val qSslTrustAll = qualString("ssl_trust_all", "trueInsteadOfBool")
+
+    val ex = intercept[DASSdkInvalidArgumentException] {
+      mockHttpTable.execute(Seq(qUrl, qSslTrustAll), Seq.empty, Seq.empty, None)
+    }
+    assert(ex.getMessage.contains("must be a boolean value"))
+  }
+
+  test("request_body is not string => throws DASSdkInvalidArgumentException") {
+    val qUrl = qualString("url", "http://example.com")
+    // Provide a bool instead of a string
+    val qBody = qualBool("request_body", true)
+
+    val ex = intercept[DASSdkInvalidArgumentException] {
+      mockHttpTable.execute(Seq(qUrl, qBody), Seq.empty, Seq.empty, None)
+    }
+    assert(ex.getMessage.contains("must be a string value"))
+  }
+
+  test("method is not string => throws DASSdkInvalidArgumentException") {
+    val qUrl = qualString("url", "http://example.com")
+    // Provide a bool instead of a string
+    val qMethod = qualBool("method", true)
+
+    val ex = intercept[DASSdkInvalidArgumentException] {
+      mockHttpTable.execute(Seq(qUrl, qMethod), Seq.empty, Seq.empty, None)
+    }
+    assert(ex.getMessage.contains("must be a string value"))
+  }
+
+  test("UnknownHostException => throws DASSdkInvalidArgumentException") {
+    // Force the client.send() to throw UnknownHostException
+    when(mockClient.send(any[java.net.http.HttpRequest], any[BodyHandler[String]]()))
+      .thenThrow(new UnknownHostException("no-such-host"))
+
+    val qUrl = qualString("url", "http://some-unknown-host")
+    val ex = intercept[DASSdkInvalidArgumentException] {
+      mockHttpTable.execute(Seq(qUrl), Seq.empty, Seq.empty, None)
+    }
+    assert(ex.getMessage.contains("Unknown host: no-such-host"))
+  }
+
+  test("HttpTimeoutException => throws DASSdkInvalidArgumentException") {
+    val qMethod = qualString("method", "GET")
+    val qUrl = qualString("url", "https://example.com/get")
+
+    when(mockClient.send(any[HttpRequest], any[HttpResponse.BodyHandler[String]]))
+      .thenThrow(new HttpTimeoutException("Request timed out"))
+
+    val qConnectTimeout = qualInt("connect_timeout_millis", 1)
+
+    val quals = Seq(qUrl, qMethod, qConnectTimeout)
+    val ex = intercept[DASSdkInvalidArgumentException] {
+      mockHttpTable.execute(quals, Seq("method", "response_status_code", "response_body"), Seq.empty, None)
+    }
+
+    assert(ex.getMessage.contains("Request timed out:"))
+  }
+
+  test("ConnectException => throws DASSdkInvalidArgumentException") {
+    when(mockClient.send(any[java.net.http.HttpRequest], any[BodyHandler[String]]()))
+      .thenThrow(new ConnectException("Connection refused"))
+
+    val qUrl = qualString("url", "http://connection-refused.com")
+    val ex = intercept[DASSdkInvalidArgumentException] {
+      mockHttpTable.execute(Seq(qUrl), Seq.empty, Seq.empty, None)
+    }
+    assert(ex.getMessage.contains("Connection error: Connection refused"))
+  }
+
+  test("SSLException => throws DASSdkInvalidArgumentException") {
+    when(mockClient.send(any[java.net.http.HttpRequest], any[BodyHandler[String]]()))
+      .thenThrow(new SSLException("Untrusted certificate"))
+
+    val qUrl = qualString("url", "https://example.com/ssl")
+    val ex = intercept[DASSdkInvalidArgumentException] {
+      mockHttpTable.execute(Seq(qUrl), Seq.empty, Seq.empty, None)
+    }
+    assert(ex.getMessage.contains("SSL error: Untrusted certificate"))
+  }
+
+  test("IOException => throws DASSdkInvalidArgumentException") {
+    // This also covers other I/O issues
+    when(mockClient.send(any[java.net.http.HttpRequest], any[BodyHandler[String]]()))
+      .thenThrow(new java.io.IOException("Some IO error"))
+
+    val qUrl = qualString("url", "https://example.com/io")
+    val ex = intercept[DASSdkInvalidArgumentException] {
+      mockHttpTable.execute(Seq(qUrl), Seq.empty, Seq.empty, None)
+    }
+    assert(ex.getMessage.contains("Network I/O error: Some IO error"))
+  }
+
+  // Tests for the read-only operations: insert, update, delete
+
+  test("insert => throws DASSdkInvalidArgumentException") {
+    val row = ProtoRow.getDefaultInstance
+    val ex = intercept[DASSdkInvalidArgumentException] {
+      mockHttpTable.insert(row)
+    }
+    assert(ex.getMessage.contains("read-only"))
+  }
+
+  test("update => throws DASSdkInvalidArgumentException") {
+    val row = ProtoRow.getDefaultInstance
+    val ex = intercept[DASSdkInvalidArgumentException] {
+      mockHttpTable.update(ProtoValue.newBuilder().build(), row)
+    }
+    assert(ex.getMessage.contains("read-only"))
+  }
+
+  test("delete => throws DASSdkInvalidArgumentException") {
+    val ex = intercept[DASSdkInvalidArgumentException] {
+      mockHttpTable.delete(ProtoValue.newBuilder().build())
+    }
+    assert(ex.getMessage.contains("read-only"))
   }
 
   // A helper method to create a SimpleQual with (column = stringValue)
