@@ -17,7 +17,7 @@ import com.rawlabs.protocol.das.v1.functions.FunctionDefinition
 import com.rawlabs.protocol.das.v1.tables.TableDefinition
 
 /**
- * This DAS has exactly one table: "net_http_request". All query parameters (url, method, etc.) come from the WHERE
+ * This DAS has exactly one table: "http_request". All query parameters (url, method, etc.) come from the WHERE
  * clause.
  */
 class DASHttp extends DASSdk {
@@ -32,7 +32,7 @@ class DASHttp extends DASSdk {
   override def functionDefinitions: Seq[FunctionDefinition] = Seq.empty
 
   /**
-   * If the user queries "net_http_request", return our single table. Otherwise, None.
+   * If the user queries "http_request", return our single table. Otherwise, None.
    */
   override def getTable(name: String): Option[DASHttpTable] =
     if (name == "http_request") Some(httpTable) else None
