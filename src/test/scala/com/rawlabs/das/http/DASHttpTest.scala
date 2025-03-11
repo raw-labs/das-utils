@@ -75,114 +75,36 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
   // --------------------------------------------------------------------------
   // Tests
   // --------------------------------------------------------------------------
-
-  test("Missing 'url' => throws DASSdkException") {
-    val quals = Seq(
-      qualString("method", "GET") // no url => should throw
-    )
-
-    val ex = intercept[DASSdkInvalidArgumentException] {
-      mockHttpTable.execute(quals, Seq.empty, Seq.empty, None)
-    }
-
-    assert(ex.getMessage.contains("Missing 'url'"))
-  }
-
-  test("malformed 'url' => throws DASSdkInvalidArgumentException") {
-    val quals = Seq(
-      qualString("url", "not and url") // malformed url => should throw
-    )
-
-    assertThrows[DASSdkInvalidArgumentException] {
-      val res = mockHttpTable.execute(quals, Seq.empty, Seq.empty, None)
-      collectRows(res)
-    }
-  }
-
-  test("not supported scheme 'url' => throws DASSdkInvalidArgumentException") {
-    val quals = Seq(
-      qualString("url", "file://path/file") // not supported scheme url => should throw
-    )
-
-    assertThrows[DASSdkInvalidArgumentException] {
-      val res = mockHttpTable.execute(quals, Seq.empty, Seq.empty, None)
-      collectRows(res)
-    }
-  }
-
-  test("Unknown column => throws DASSdkInvalidArgumentException") {
-    val quals =
-      Seq(qualString("url", "http://example.com"), qualString("method", "GET"), qualBool("some_unknown_col", true))
-
-    assertThrows[DASSdkInvalidArgumentException] {
-      mockHttpTable.execute(quals, Seq.empty, Seq.empty, None)
-    }
-  }
-
-  test("Wrong operator => throws DASSdkInvalidArgumentException") {
-    // We'll build a Qual with operator = LESS_THAN
-    val q = ProtoQual
-      .newBuilder()
-      .setName("url")
-      .setSimpleQual(
-        SimpleQual
-          .newBuilder()
-          .setOperator(Operator.LESS_THAN) // not EQUALS => should throw
-          .setValue(ProtoValue
-            .newBuilder()
-            .setString(ValueString.newBuilder().setV("http://example.com"))))
-      .build()
-
-    assertThrows[DASSdkInvalidArgumentException] {
-      mockHttpTable.execute(Seq(q), Seq.empty, Seq.empty, None)
-    }
-  }
-
-  test("follow_redirect is not a bool => throws DASSdkInvalidArgumentException") {
-
-    val qUrl = qualString("url", "http://example.com")
-    val qMethod = qualString("method", "GET")
-    // follow_redirect => string "true" => mismatch
-    val qRedirect = qualString("follow_redirect", "true")
-
-    val quals = Seq(qUrl, qMethod, qRedirect)
-    assertThrows[DASSdkInvalidArgumentException] {
-      mockHttpTable.execute(quals, Seq.empty, Seq.empty, None)
-    }
-  }
-
-  test("request_headers is not a record => throws DASSdkInvalidArgumentException") {
-
-    val qUrl = qualString("url", "http://example.com")
-    val qMethod = qualString("method", "GET")
-    // request_headers => string => mismatch
-    val qHeaders = qualString("request_headers", "Accept:application/json")
-
-    val quals = Seq(qUrl, qMethod, qHeaders)
-    assertThrows[DASSdkInvalidArgumentException] {
-      mockHttpTable.execute(quals, Seq.empty, Seq.empty, None)
-    }
-  }
-
   test("GET method with args => success") {
+    when(mockHttpResponse.statusCode()).thenReturn(203)
+    when(mockHttpResponse.body()).thenReturn("some body")
+    val headers = Map[String, java.util.List[String]]("Content-Type" -> List("application/json").asJava)
+    when(mockHttpHeaders.map()).thenReturn(headers.asJava)
+
     val qMethod = qualString("method", "GET")
     val qUrl = qualString("url", "https://example.com/get")
     // get method without args is returning a 502 error
     val qArgs = qualRecordOfStrings("url_args", Map("debug" -> "true", "test" -> "123"))
 
     val quals = Seq(qUrl, qMethod, qArgs)
-    val result = mockHttpTable.execute(quals, Seq("method", "response_status_code", "response_body"), Seq.empty, None)
+    val result = mockHttpTable.execute(
+      quals,
+      Seq("method", "response_status_code", "response_body", "response_headers"),
+      Seq.empty,
+      None)
     val rows = collectRows(result)
     assert(rows.size == 1)
 
     val rowMap = rowToMap(rows.head)
     assert(rowMap("method") == "GET")
     assert(rowMap.contains("response_status_code"))
-    assert(rowMap("response_status_code") == "200")
-    assert(rowMap.contains("response_body"))
+    assert(rowMap("response_status_code") == "203")
+    assert(rowMap("response_body") == "some body")
+    assert(rowMap("response_headers") == "{Content-Type:application/json}")
+
   }
 
-  test("POST with custom headers & url_args => returns one row") {
+  test("POST with custom headers & url_args => success") {
     val qUrl = qualString("url", "https://example.com/post")
     val qMethod = qualString("method", "POST")
     val qBody = qualString("request_body", """{"foo":"bar"}""")
@@ -206,11 +128,10 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
     // The table might append "?debug=true&test=123" to the URL
     assert(rowMap("url").contains("https://example.com/post"))
     assert(rowMap("follow_redirect") == "true")
-    assert(rowMap.contains("request_headers"))
-    assert(rowMap.contains("url_args"))
-    assert(rowMap.contains("response_status_code"))
+    assert(rowMap("request_headers") == "{Content-Type:application/json, User-Agent:MyDAS}")
+    assert(rowMap("url_args") == "{debug:true, test:123}")
     assert(rowMap("response_status_code") == "200")
-    assert(rowMap.contains("response_body"))
+    assert(rowMap("response_body") == "")
 
   }
 
@@ -315,6 +236,94 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
     assert(rowMap.contains("response_status_code"))
     assert(rowMap("response_status_code") == "200")
     assert(rowMap.contains("response_body"))
+  }
+
+  test("Missing 'url' => throws DASSdkException") {
+    val quals = Seq(
+      qualString("method", "GET") // no url => should throw
+    )
+
+    val ex = intercept[DASSdkInvalidArgumentException] {
+      mockHttpTable.execute(quals, Seq.empty, Seq.empty, None)
+    }
+
+    assert(ex.getMessage.contains("Missing 'url'"))
+  }
+
+  test("malformed 'url' => throws DASSdkInvalidArgumentException") {
+    val quals = Seq(
+      qualString("url", "not and url") // malformed url => should throw
+    )
+
+    assertThrows[DASSdkInvalidArgumentException] {
+      val res = mockHttpTable.execute(quals, Seq.empty, Seq.empty, None)
+      collectRows(res)
+    }
+  }
+
+  test("not supported scheme 'url' => throws DASSdkInvalidArgumentException") {
+    val quals = Seq(
+      qualString("url", "file://path/file") // not supported scheme url => should throw
+    )
+
+    assertThrows[DASSdkInvalidArgumentException] {
+      val res = mockHttpTable.execute(quals, Seq.empty, Seq.empty, None)
+      collectRows(res)
+    }
+  }
+
+  test("Unknown column => throws DASSdkInvalidArgumentException") {
+    val quals =
+      Seq(qualString("url", "http://example.com"), qualString("method", "GET"), qualBool("some_unknown_col", true))
+
+    assertThrows[DASSdkInvalidArgumentException] {
+      mockHttpTable.execute(quals, Seq.empty, Seq.empty, None)
+    }
+  }
+
+  test("Wrong operator => throws DASSdkInvalidArgumentException") {
+    // We'll build a Qual with operator = LESS_THAN
+    val q = ProtoQual
+      .newBuilder()
+      .setName("url")
+      .setSimpleQual(
+        SimpleQual
+          .newBuilder()
+          .setOperator(Operator.LESS_THAN) // not EQUALS => should throw
+          .setValue(ProtoValue
+            .newBuilder()
+            .setString(ValueString.newBuilder().setV("http://example.com"))))
+      .build()
+
+    assertThrows[DASSdkInvalidArgumentException] {
+      mockHttpTable.execute(Seq(q), Seq.empty, Seq.empty, None)
+    }
+  }
+
+  test("follow_redirect is not a bool => throws DASSdkInvalidArgumentException") {
+
+    val qUrl = qualString("url", "http://example.com")
+    val qMethod = qualString("method", "GET")
+    // follow_redirect => string "true" => mismatch
+    val qRedirect = qualString("follow_redirect", "true")
+
+    val quals = Seq(qUrl, qMethod, qRedirect)
+    assertThrows[DASSdkInvalidArgumentException] {
+      mockHttpTable.execute(quals, Seq.empty, Seq.empty, None)
+    }
+  }
+
+  test("request_headers is not a record => throws DASSdkInvalidArgumentException") {
+
+    val qUrl = qualString("url", "http://example.com")
+    val qMethod = qualString("method", "GET")
+    // request_headers => string => mismatch
+    val qHeaders = qualString("request_headers", "Accept:application/json")
+
+    val quals = Seq(qUrl, qMethod, qHeaders)
+    assertThrows[DASSdkInvalidArgumentException] {
+      mockHttpTable.execute(quals, Seq.empty, Seq.empty, None)
+    }
   }
 
   test("Unknown method => throw DASSdkInvalidArgumentException") {
@@ -568,6 +577,12 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
         if (v.hasString) v.getString.getV
         else if (v.hasBool) v.getBool.getV.toString
         else if (v.hasInt) v.getInt.getV.toString
+        else if (v.hasRecord)
+          v.getRecord.getAttsList.asScala
+            .map { a =>
+              a.getName + ":" + a.getValue.getString.getV
+            }
+            .mkString("{", ", ", "}")
         else s"<complex or unsupported: $v>"
       name -> s
     }.toMap
