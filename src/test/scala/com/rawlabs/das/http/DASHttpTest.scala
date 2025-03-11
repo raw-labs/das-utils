@@ -50,9 +50,6 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
   private val mockHttpResponse = mock[HttpResponse[String]]
   private val mockHttpHeaders = mock[HttpHeaders]
 
-  when(mockClient.send(any[HttpRequest], any[BodyHandler[String]]())).thenReturn(mockHttpResponse)
-  when(mockHttpResponse.statusCode()).thenReturn(200)
-  when(mockHttpResponse.body()).thenReturn("")
 
   val mockHttpTable = new DASHttpTable {
     override def buildHttpClient(followRedirect: Boolean, connectTimeoutMillis: Int, sslTrustAll: Boolean): HttpClient =
