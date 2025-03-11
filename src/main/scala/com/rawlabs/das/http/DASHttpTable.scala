@@ -20,7 +20,7 @@ import javax.net.ssl._
 import scala.jdk.CollectionConverters._
 
 import com.rawlabs.das.sdk.scala.DASTable
-import com.rawlabs.das.sdk.{DASExecuteResult, DASSdkException}
+import com.rawlabs.das.sdk.{DASExecuteResult, DASSdkInvalidArgumentException}
 import com.rawlabs.protocol.das.v1.query.{Operator, PathKey, Qual, SortKey}
 import com.rawlabs.protocol.das.v1.tables.{
   Column => ProtoColumn,
@@ -102,7 +102,7 @@ class DASHttpTable extends DASTable {
 
     // 2) Validate required fields
     val url = params.url.getOrElse {
-      throw new DASSdkException("Missing 'url' in WHERE clause")
+      throw new DASSdkInvalidArgumentException("Missing 'url' in WHERE clause")
     }
 
     val method = params.method.getOrElse("GET").toUpperCase
@@ -128,7 +128,7 @@ class DASHttpTable extends DASTable {
           HttpRequest.newBuilder().uri(URI.create(finalUrl))
         } catch {
           case ex: IllegalArgumentException =>
-            throw new DASSdkException(s"Invalid url: ${ex.getMessage}", ex)
+            throw new DASSdkInvalidArgumentException(s"Invalid url: ${ex.getMessage}", ex)
         }
 
       requestBuilder.timeout(java.time.Duration.ofMillis(requestTimeoutMillis))
@@ -141,7 +141,7 @@ class DASHttpTable extends DASTable {
         case "PATCH"   => requestBuilder.method("PATCH", HttpRequest.BodyPublishers.ofString(body))
         case "HEAD"    => requestBuilder.HEAD()
         case "OPTIONS" => requestBuilder.method("OPTIONS", HttpRequest.BodyPublishers.ofString(body))
-        case unknown   => throw new DASSdkException(s"Unsupported HTTP method: $unknown")
+        case unknown   => throw new DASSdkInvalidArgumentException(s"Unsupported HTTP method: $unknown")
       }
 
       // 6) Add request headers
@@ -197,18 +197,18 @@ class DASHttpTable extends DASTable {
 
     } catch {
       case ex: java.net.http.HttpTimeoutException =>
-        throw new DASSdkException(s"Request timed out: ${ex.getMessage}", ex)
+        throw new DASSdkInvalidArgumentException(s"Request timed out: ${ex.getMessage}", ex)
       case ex: java.net.UnknownHostException =>
-        throw new DASSdkException(s"Unknown host: ${ex.getMessage}", ex)
+        throw new DASSdkInvalidArgumentException(s"Unknown host: ${ex.getMessage}", ex)
       case ex: java.net.ConnectException =>
-        throw new DASSdkException(s"Connection error: ${ex.getMessage}", ex)
+        throw new DASSdkInvalidArgumentException(s"Connection error: ${ex.getMessage}", ex)
       case ex: javax.net.ssl.SSLException =>
-        throw new DASSdkException(s"SSL error: ${ex.getMessage}", ex)
+        throw new DASSdkInvalidArgumentException(s"SSL error: ${ex.getMessage}", ex)
       case ex: java.io.IOException =>
-        throw new DASSdkException(s"Network I/O error: ${ex.getMessage}", ex)
+        throw new DASSdkInvalidArgumentException(s"Network I/O error: ${ex.getMessage}", ex)
       case ex: IllegalArgumentException =>
         // e.g., malformed URL or invalid arguments
-        throw new DASSdkException(s"Invalid request parameter: ${ex.getMessage}", ex)
+        throw new DASSdkInvalidArgumentException(s"Invalid request parameter: ${ex.getMessage}", ex)
     } finally {
       client.close()
     }
@@ -216,16 +216,19 @@ class DASHttpTable extends DASTable {
 
   // read-only
   override def insert(row: ProtoRow): ProtoRow =
-    throw new DASSdkException("HTTP single-table is read-only.")
+    throw new DASSdkInvalidArgumentException("HTTP single-table is read-only.")
   override def update(rowId: Value, newRow: ProtoRow): ProtoRow =
-    throw new DASSdkException("HTTP single-table is read-only.")
+    throw new DASSdkInvalidArgumentException("HTTP single-table is read-only.")
   override def delete(rowId: Value): Unit =
-    throw new DASSdkException("HTTP single-table is read-only.")
+    throw new DASSdkInvalidArgumentException("HTTP single-table is read-only.")
 
   /**
    * Helper to build an HttpClient with connect-timeout, SSL trust-all, and redirect handling.
    */
-  private def buildHttpClient(followRedirect: Boolean, connectTimeoutMillis: Int, sslTrustAll: Boolean): HttpClient = {
+  protected def buildHttpClient(
+      followRedirect: Boolean,
+      connectTimeoutMillis: Int,
+      sslTrustAll: Boolean): HttpClient = {
     val builder = HttpClient.newBuilder()
 
     // Follow redirects if set
@@ -285,14 +288,15 @@ class DASHttpTable extends DASTable {
 
       // We only handle simpleQual
       if (!q.hasSimpleQual) {
-        throw new DASSdkException(s"Column '$colName' must be a simple equality.")
+        throw new DASSdkInvalidArgumentException(s"Column '$colName' must be a simple equality.")
       }
 
       val sq = q.getSimpleQual
 
       // We only handle operator = EQUALS
       if (sq.getOperator != Operator.EQUALS) {
-        throw new DASSdkException(s"Only EQUALS operator is supported. Found ${sq.getOperator} for column '$colName'.")
+        throw new DASSdkInvalidArgumentException(
+          s"Only EQUALS operator is supported. Found ${sq.getOperator} for column '$colName'.")
       }
 
       val v = sq.getValue
@@ -300,53 +304,53 @@ class DASHttpTable extends DASTable {
       colName match {
         case "url" =>
           if (!v.hasString) {
-            throw new DASSdkException("Column 'url' must be a string value.")
+            throw new DASSdkInvalidArgumentException("Column 'url' must be a string value.")
           }
           result = result.copy(url = Some(v.getString.getV))
 
         case "method" =>
           if (!v.hasString) {
-            throw new DASSdkException("Column 'method' must be a string value.")
+            throw new DASSdkInvalidArgumentException("Column 'method' must be a string value.")
           }
           result = result.copy(method = Some(v.getString.getV))
 
         case "request_body" =>
           if (!v.hasString) {
-            throw new DASSdkException("Column 'request_body' must be a string value.")
+            throw new DASSdkInvalidArgumentException("Column 'request_body' must be a string value.")
           }
           result = result.copy(requestBody = Some(v.getString.getV))
 
         case "follow_redirect" =>
           if (!v.hasBool) {
-            throw new DASSdkException("Column 'follow_redirect' must be a boolean value.")
+            throw new DASSdkInvalidArgumentException("Column 'follow_redirect' must be a boolean value.")
           }
           result = result.copy(followRedirect = Some(v.getBool.getV))
 
         case "connect_timeout_millis" =>
           if (!v.hasInt) {
-            throw new DASSdkException("Column 'connect_timeout_millis' must be an integer value.")
+            throw new DASSdkInvalidArgumentException("Column 'connect_timeout_millis' must be an integer value.")
           }
           result = result.copy(connectTimeoutMillis = Some(v.getInt.getV))
         case "request_timeout_millis" =>
           if (!v.hasInt) {
-            throw new DASSdkException("Column 'request_timeout_millis' must be an integer value.")
+            throw new DASSdkInvalidArgumentException("Column 'request_timeout_millis' must be an integer value.")
           }
           result = result.copy(requestTimeoutMillis = Some(v.getInt.getV))
         case "ssl_trust_all" =>
           if (!v.hasBool) {
-            throw new DASSdkException("Column 'ssl_trust_all' must be a boolean value.")
+            throw new DASSdkInvalidArgumentException("Column 'ssl_trust_all' must be a boolean value.")
           }
           result = result.copy(sslTrustAll = Some(v.getBool.getV))
         case "request_headers" =>
           if (!v.hasRecord) {
-            throw new DASSdkException("Column 'request_headers' must be a record.")
+            throw new DASSdkInvalidArgumentException("Column 'request_headers' must be a record.")
           }
           val rec = v.getRecord
           val items = rec.getAttsList.asScala.toList.map { it =>
             val key = it.getName
             val value = it.getValue
             if (!value.hasString) {
-              throw new DASSdkException("Column 'request_headers' must be a record of string values.")
+              throw new DASSdkInvalidArgumentException("Column 'request_headers' must be a record of string values.")
             }
             key -> value.getString.getV
           }
@@ -354,14 +358,14 @@ class DASHttpTable extends DASTable {
 
         case "url_args" =>
           if (!v.hasRecord) {
-            throw new DASSdkException("Column 'url_args' must be a record.")
+            throw new DASSdkInvalidArgumentException("Column 'url_args' must be a record.")
           }
           val rec = v.getRecord
           val items = rec.getAttsList.asScala.toList.map { it =>
             val key = it.getName
             val value = it.getValue
             if (!value.hasString) {
-              throw new DASSdkException("Column 'url_args' must be a record of string values.")
+              throw new DASSdkInvalidArgumentException("Column 'url_args' must be a record of string values.")
             }
             key -> value.getString.getV
           }
@@ -369,7 +373,7 @@ class DASHttpTable extends DASTable {
 
         // If you want to **throw** on unknown columns:
         case unknown =>
-          throw new DASSdkException(s"Column '$unknown' is not recognized by this DAS.")
+          throw new DASSdkInvalidArgumentException(s"Column '$unknown' is not recognized by this DAS.")
       }
     }
     result

@@ -94,10 +94,11 @@ lazy val root = (project in file("."))
     publishSettings,
     libraryDependencies ++= Seq(
       // RAW Labs DAS & Protocol
-      "com.raw-labs" %% "das-server-scala" % "0.3.2" % "compile->compile;test->test",
+      "com.raw-labs" %% "das-server-scala" % "0.5.0" % "compile->compile;test->test",
       "com.raw-labs" %% "protocol-das" % "1.0.0" % "compile->compile;test->test",
       // ScalaTest for unit tests
-      "org.scalatest" %% "scalatest" % "3.2.19" % "test"))
+      "org.scalatest" %% "scalatest" % "3.2.19" % "test",
+      "org.scalatestplus" %% "mockito-5-12" % "3.2.19.0" % "test"))
 
 // -----------------------------------------------------------------------------
 // Docker Project: builds a Docker image for the DAS server
@@ -191,4 +192,4 @@ lazy val docker = (project in file("docker"))
   .settings(
     strictBuildSettings,
     dockerSettings,
-    libraryDependencies += "com.raw-labs" %% "das-server-scala" % "0.3.0" % "compile->compile;test->test")
+    libraryDependencies += "com.raw-labs" %% "das-server-scala" % "0.5.0" % "compile->compile;test->test")
