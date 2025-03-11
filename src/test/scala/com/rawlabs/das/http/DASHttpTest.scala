@@ -126,7 +126,7 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
 
     val rowMap = rowToMap(rows.head)
     // The table might append "?debug=true&test=123" to the URL
-    assert(rowMap("url").contains("https://example.com/post"))
+    assert(rowMap("url") == "https://example.com/post")
     assert(rowMap("follow_redirect") == "true")
     assert(rowMap("request_headers") == "{Content-Type:application/json, User-Agent:MyDAS}")
     assert(rowMap("url_args") == "{debug:true, test:123}")
