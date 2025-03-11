@@ -3,28 +3,6 @@
 
 [Data Access Service](https://github.com/raw-labs/protocol-das) for making HTTP requests.
 
-
-## Overview
-
-
-This DAS plugin defines **one** table called `http_request`.
-**The `url` must be specified** in your query’s **WHERE** clause, or else an error will be thrown.
-
-A typical query looks like:
-
-```sql
-SELECT
-  response_status_code,
-  response_body
-FROM
-  http_request
-WHERE
-  url = 'https://httpbin.org/post'
-  AND method = 'POST'
-  AND request_headers = '{"Content-Type": "application/json"}'::jsonb
-  AND request_body = '{"hello":"world"}'
-```
-
 ## How to use
 
 First you need to build the project:
