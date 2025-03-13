@@ -76,8 +76,8 @@ lazy val publishSettings = Seq(
   versionScheme := Some("early-semver"),
   publish / skip := false,
   publishMavenStyle := true,
-  // Point to a new GitHub repo for "das-http", for example:
-  publishTo := Some("GitHub raw-labs Apache Maven Packages" at "https://maven.pkg.github.com/raw-labs/das-http"),
+  // Point to a new GitHub repo for "das-utils", for example:
+  publishTo := Some("GitHub raw-labs Apache Maven Packages" at "https://maven.pkg.github.com/raw-labs/das-utils"),
   publishConfiguration := publishConfiguration.value.withOverwrite(isCI))
 
 // Consolidate everything into strict build settings
@@ -85,11 +85,11 @@ lazy val strictBuildSettings =
   commonSettings ++ compileSettings ++ buildSettings ++ testSettings ++ Seq(scalacOptions ++= Seq("-Xfatal-warnings"))
 
 // -----------------------------------------------------------------------------
-// Main Project: "das-http"
+// Main Project: "das-utils"
 // -----------------------------------------------------------------------------
 lazy val root = (project in file("."))
   .settings(
-    name := "das-http",
+    name := "das-utils",
     strictBuildSettings,
     publishSettings,
     libraryDependencies ++= Seq(
@@ -108,14 +108,14 @@ val amzn_corretto_bin = s"java-21-amazon-corretto-jdk_${amzn_jdk_version}_amd64.
 val amzn_corretto_bin_dl_url = s"https://corretto.aws/downloads/resources/${amzn_jdk_version.replace('-', '.')}"
 
 lazy val dockerSettings = strictBuildSettings ++ Seq(
-  name := "das-http-server",
+  name := "das-utils-server",
   dockerBaseImage := s"--platform=amd64 debian:bookworm-slim",
   dockerLabels ++= Map(
     "vendor" -> "RAW Labs SA",
-    "product" -> "das-http-server",
+    "product" -> "das-utils-server",
     "image-type" -> "final",
-    // Update the repo URL below to match your actual GitHub repository for "das-http"
-    "org.opencontainers.image.source" -> "https://github.com/raw-labs/das-http"),
+    // Update the repo URL below to match your actual GitHub repository for "das-utils"
+    "org.opencontainers.image.source" -> "https://github.com/raw-labs/das-utils"),
   Docker / daemonUser := "raw",
   dockerExposedVolumes := Seq("/var/log/raw"),
   dockerExposedPorts := Seq(50051),
@@ -173,7 +173,7 @@ lazy val dockerSettings = strictBuildSettings ++ Seq(
   dockerAlias := dockerAlias.value.withTag(Option(version.value.replace("+", "-"))),
   // For multi-registry push (dev vs release)
   dockerAliases := {
-    val devRegistry = sys.env.getOrElse("DEV_REGISTRY", "ghcr.io/raw-labs/das-http")
+    val devRegistry = sys.env.getOrElse("DEV_REGISTRY", "ghcr.io/raw-labs/das-utils")
     val releaseRegistry = sys.env.get("RELEASE_DOCKER_REGISTRY")
     val baseAlias = dockerAlias.value.withRegistryHost(Some(devRegistry))
 

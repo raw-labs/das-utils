@@ -10,10 +10,10 @@
  * licenses/APL.txt.
  */
 
-package com.rawlabs.das.http
+package com.rawlabs.das.utils.http
 
 import java.net.http.HttpResponse.BodyHandler
-import java.net.http.{HttpClient, HttpHeaders, HttpRequest, HttpResponse, HttpTimeoutException}
+import java.net.http._
 import java.net.{ConnectException, UnknownHostException}
 import javax.net.ssl.SSLException
 
@@ -50,8 +50,7 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
   private val mockHttpResponse = mock[HttpResponse[String]]
   private val mockHttpHeaders = mock[HttpHeaders]
 
-
-  val mockHttpTable = new DASHttpTable {
+  private val mockHttpTable = new DASHttpTable {
     override def buildHttpClient(followRedirect: Boolean, connectTimeoutMillis: Int, sslTrustAll: Boolean): HttpClient =
       mockClient
   }
@@ -105,7 +104,7 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
     val qUrl = qualString("url", "https://example.com/post")
     val qMethod = qualString("method", "POST")
     val qBody = qualString("request_body", """{"foo":"bar"}""")
-    val qRedirect = qualBool("follow_redirect", true)
+    val qRedirect = qualBool("follow_redirect", boolVal = true)
 
     val qHeaders =
       qualRecordOfStrings("request_headers", Map("Content-Type" -> "application/json", "User-Agent" -> "MyDAS"))
@@ -271,7 +270,10 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
 
   test("Unknown column => throws DASSdkInvalidArgumentException") {
     val quals =
-      Seq(qualString("url", "http://example.com"), qualString("method", "GET"), qualBool("some_unknown_col", true))
+      Seq(
+        qualString("url", "http://example.com"),
+        qualString("method", "GET"),
+        qualBool("some_unknown_col", boolVal = true))
 
     assertThrows[DASSdkInvalidArgumentException] {
       mockHttpTable.execute(quals, Seq.empty, Seq.empty, None)
@@ -373,7 +375,7 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
   test("request_body is not string => throws DASSdkInvalidArgumentException") {
     val qUrl = qualString("url", "http://example.com")
     // Provide a bool instead of a string
-    val qBody = qualBool("request_body", true)
+    val qBody = qualBool("request_body", boolVal = true)
 
     val ex = intercept[DASSdkInvalidArgumentException] {
       mockHttpTable.execute(Seq(qUrl, qBody), Seq.empty, Seq.empty, None)
@@ -384,7 +386,7 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
   test("method is not string => throws DASSdkInvalidArgumentException") {
     val qUrl = qualString("url", "http://example.com")
     // Provide a bool instead of a string
-    val qMethod = qualBool("method", true)
+    val qMethod = qualBool("method", boolVal = true)
 
     val ex = intercept[DASSdkInvalidArgumentException] {
       mockHttpTable.execute(Seq(qUrl, qMethod), Seq.empty, Seq.empty, None)

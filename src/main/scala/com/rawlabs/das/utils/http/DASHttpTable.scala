@@ -10,7 +10,8 @@
  * licenses/APL.txt.
  */
 
-package com.rawlabs.das.http
+package com.rawlabs.das.utils.http
+
 import java.net.URI
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.security.SecureRandom

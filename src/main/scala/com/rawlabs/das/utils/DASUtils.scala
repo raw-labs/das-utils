@@ -10,17 +10,17 @@
  * licenses/APL.txt.
  */
 
-package com.rawlabs.das.http
+package com.rawlabs.das.utils
 
 import com.rawlabs.das.sdk.scala.{DASFunction, DASSdk}
+import com.rawlabs.das.utils.http.DASHttpTable
 import com.rawlabs.protocol.das.v1.functions.FunctionDefinition
 import com.rawlabs.protocol.das.v1.tables.TableDefinition
 
 /**
- * This DAS has exactly one table: "http_request". All query parameters (url, method, etc.) come from the WHERE
- * clause.
+ * This DAS has exactly one table: "http_request". All query parameters (url, method, etc.) come from the WHERE clause.
  */
-class DASHttp extends DASSdk {
+class DASUtils extends DASSdk {
 
   // Create a single table instance
   private val httpTable = new DASHttpTable()
