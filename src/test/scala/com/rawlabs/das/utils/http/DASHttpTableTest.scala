@@ -305,12 +305,12 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
     }
   }
 
-  test("follow_redirect is not a bool => throws DASSdkInvalidArgumentException") {
+  test("follow_redirects is not a bool => throws DASSdkInvalidArgumentException") {
 
     val qUrl = qualString("url", "http://example.com")
     val qMethod = qualString("method", "GET")
-    // follow_redirect => string "true" => mismatch
-    val qRedirect = qualString("follow_redirect", "true")
+    // follow_redirects => string "true" => mismatch
+    val qRedirect = qualString("follow_redirects", "true")
 
     val quals = Seq(qUrl, qMethod, qRedirect)
     assertThrows[DASSdkInvalidArgumentException] {
