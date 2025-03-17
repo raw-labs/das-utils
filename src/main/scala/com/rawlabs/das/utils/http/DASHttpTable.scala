@@ -43,10 +43,8 @@ class DASHttpTable extends DASTable with StrictLogging {
   private val columns: Seq[(String, Type)] = Seq(
     "url" -> mkStringType(),
     "method" -> mkStringType(),
-    // request_headers => jsonb record
-    "request_headers" -> mkRecordType(),
-    // url_args => jsonb record
-    "url_args" -> mkRecordType(),
+    "request_headers" -> mkRecordType(), // jsonb record
+    "url_args" -> mkRecordType(), // jsonb record
     "request_body" -> mkStringType(),
     "follow_redirect" -> mkBoolType(),
     "connect_timeout_millis" -> mkIntType(),
@@ -55,7 +53,8 @@ class DASHttpTable extends DASTable with StrictLogging {
     // Output columns
     "response_status_code" -> mkIntType(),
     "response_body" -> mkStringType(),
-    "response_headers" -> mkRecordType())
+    "response_headers" -> mkRecordType()
+  ) // jsonb record
 
   private val tableName = "http_request"
 
@@ -173,8 +172,7 @@ class DASHttpTable extends DASTable with StrictLogging {
         "response_status_code" -> Value.newBuilder().setInt(ValueInt.newBuilder().setV(statusCode)).build(),
         "response_body" -> mkStringValue(respBody),
         "response_headers" -> mkRecordValue(
-          // flatten header values into a single string
-          response.headers().map().asScala.map { case (key, values) => key -> values.asScala.mkString(",") }.toMap))
+          response.headers().map().asScala.map { case (k, v) => k -> v.asScala.toList }.toMap))
 
       // Add them if in wantedCols
       columns.foreach { case (colName, _) =>
@@ -402,13 +400,26 @@ class DASHttpTable extends DASTable with StrictLogging {
     Value.newBuilder().setString(ValueString.newBuilder().setV(s)).build()
   }
 
-  private def mkRecordValue(values: Map[String, String]) = {
+  private def mkRecordValue(values: Map[String, Any]) = {
     val recordBuilder = ValueRecord.newBuilder()
+    // for now, we only support string and list of strings for values
     val atts = values.map { case (k, v) =>
-      val value = Value.newBuilder().setString(ValueString.newBuilder().setV(v)).build()
-      ValueRecordAttr.newBuilder().setName(k).setValue(value).build()
-
+      v match {
+        case s: String =>
+          val value = Value.newBuilder().setString(ValueString.newBuilder().setV(s)).build()
+          ValueRecordAttr.newBuilder().setName(k).setValue(value).build()
+        case l: List[_] =>
+          val list = ValueList.newBuilder()
+          l.foreach { s =>
+            list.addValues(Value.newBuilder().setString(ValueString.newBuilder().setV(s.toString)).build())
+          }
+          val value = Value.newBuilder().setList(list).build()
+          ValueRecordAttr.newBuilder().setName(k).setValue(value).build()
+        case _ =>
+          throw new DASSdkInvalidArgumentException(s"Unsupported value type for record: $v")
+      }
     }
+
     recordBuilder.addAllAtts(atts.asJava)
     Value.newBuilder().setRecord(recordBuilder).build()
   }

@@ -74,7 +74,8 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
   test("GET method with args => success") {
     when(mockHttpResponse.statusCode()).thenReturn(203)
     when(mockHttpResponse.body()).thenReturn("some body")
-    val headers = Map[String, java.util.List[String]]("Content-Type" -> List("application/json").asJava)
+    // I want to get the headers as a Map[String, List[String]] so returning 2 values
+    val headers = Map[String, java.util.List[String]]("foo" -> List("bar", "buzz").asJava)
     when(mockHttpHeaders.map()).thenReturn(headers.asJava)
 
     val qMethod = qualString("method", "GET")
@@ -96,8 +97,7 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
     assert(rowMap.contains("response_status_code"))
     assert(rowMap("response_status_code") == "203")
     assert(rowMap("response_body") == "some body")
-    assert(rowMap("response_headers") == "{Content-Type:application/json}")
-
+    assert(rowMap("response_headers") == "{foo:[bar, buzz]}")
   }
 
   test("POST with custom headers & url_args => success") {
@@ -555,21 +555,25 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
   // Helper: convert a row into a Map(colName -> stringValue) just for test checks
   private def rowToMap(row: ProtoRow): Map[String, String] = {
     row.getColumnsList.asScala.map { c =>
-      val name = c.getName
-      val v = c.getData
-      val s =
-        if (v.hasString) v.getString.getV
-        else if (v.hasBool) v.getBool.getV.toString
-        else if (v.hasInt) v.getInt.getV.toString
-        else if (v.hasRecord)
-          v.getRecord.getAttsList.asScala
-            .map { a =>
-              a.getName + ":" + a.getValue.getString.getV
-            }
-            .mkString("{", ", ", "}")
-        else s"<complex or unsupported: $v>"
-      name -> s
+      c.getName -> valueToString(c.getData)
     }.toMap
+  }
+
+  private def valueToString(v: ProtoValue): String = {
+    if (v.hasString) v.getString.getV
+    else if (v.hasBool) v.getBool.getV.toString
+    else if (v.hasInt) v.getInt.getV.toString
+    else if (v.hasRecord) {
+      v.getRecord.getAttsList.asScala
+        .map { a =>
+          a.getName + ":" + valueToString(a.getValue)
+        }
+    }.mkString("{", ", ", "}")
+    else if (v.hasList) {
+      v.getList.getValuesList.asScala
+        .map(valueToString)
+        .mkString("[", ", ", "]")
+    } else s"<complex or unsupported: $v>"
   }
 
 }
