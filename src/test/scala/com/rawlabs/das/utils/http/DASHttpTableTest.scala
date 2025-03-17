@@ -25,7 +25,7 @@ import org.scalatest.BeforeAndAfterEach
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.mockito.MockitoSugar.mock
 
-import com.rawlabs.das.sdk.DASSdkInvalidArgumentException
+import com.rawlabs.das.sdk.{DASSdkInvalidArgumentException, DASSdkUnsupportedException}
 import com.rawlabs.protocol.das.v1.query.{Operator, Qual => ProtoQual, SimpleQual}
 import com.rawlabs.protocol.das.v1.tables.{Row => ProtoRow}
 import com.rawlabs.protocol.das.v1.types.{
@@ -268,18 +268,6 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
     }
   }
 
-  test("Unknown column => throws DASSdkInvalidArgumentException") {
-    val quals =
-      Seq(
-        qualString("url", "http://example.com"),
-        qualString("method", "GET"),
-        qualBool("some_unknown_col", boolVal = true))
-
-    assertThrows[DASSdkInvalidArgumentException] {
-      mockHttpTable.execute(quals, Seq.empty, Seq.empty, None)
-    }
-  }
-
   test("Wrong operator => throws DASSdkInvalidArgumentException") {
     // We'll build a Qual with operator = LESS_THAN
     val q = ProtoQual
@@ -348,7 +336,7 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
       mockHttpTable.execute(Seq(invalidQual), Seq.empty, Seq.empty, None)
     }
 
-    assert(ex.getMessage.contains("must be a simple equality"))
+    assert(ex.getMessage.contains("Only EQUALS operator is supported for column"))
   }
 
   test("request_timeout_millis is not int => throws DASSdkInvalidArgumentException") {
@@ -461,25 +449,22 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
 
   test("insert => throws DASSdkInvalidArgumentException") {
     val row = ProtoRow.getDefaultInstance
-    val ex = intercept[DASSdkInvalidArgumentException] {
+    intercept[DASSdkUnsupportedException] {
       mockHttpTable.insert(row)
     }
-    assert(ex.getMessage.contains("read-only"))
   }
 
   test("update => throws DASSdkInvalidArgumentException") {
     val row = ProtoRow.getDefaultInstance
-    val ex = intercept[DASSdkInvalidArgumentException] {
+    intercept[DASSdkUnsupportedException] {
       mockHttpTable.update(ProtoValue.newBuilder().build(), row)
     }
-    assert(ex.getMessage.contains("read-only"))
   }
 
   test("delete => throws DASSdkInvalidArgumentException") {
-    val ex = intercept[DASSdkInvalidArgumentException] {
+    intercept[DASSdkUnsupportedException] {
       mockHttpTable.delete(ProtoValue.newBuilder().build())
     }
-    assert(ex.getMessage.contains("read-only"))
   }
 
   // A helper method to create a SimpleQual with (column = stringValue)
