@@ -147,7 +147,7 @@ class DASHttpTable extends DASTable with StrictLogging {
       }
 
       // 6) Add request headers
-      requestHeaders.foreach { case (k, v) => requestBuilder.header(k, v) }
+      requestHeaders.foreach { case (k, values) => values.foreach(v => requestBuilder.header(k, v)) }
 
       // 7) Send
       val response = client.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString())
@@ -265,7 +265,7 @@ class DASHttpTable extends DASTable with StrictLogging {
   private case class ParsedParams(
       url: Option[String] = None,
       method: Option[String] = None,
-      requestHeaders: Option[Map[String, String]] = None,
+      requestHeaders: Option[Map[String, List[String]]] = None,
       urlArgs: Option[Map[String, String]] = None,
       requestBody: Option[String] = None,
       followRedirect: Option[Boolean] = None,
@@ -344,10 +344,20 @@ class DASHttpTable extends DASTable with StrictLogging {
           val items = rec.getAttsList.asScala.toList.map { it =>
             val key = it.getName
             val value = it.getValue
-            if (!value.hasString) {
-              throw new DASSdkInvalidArgumentException("Column 'request_headers' must be a record of string values.")
+            if (value.hasString) {
+              key -> List(value.getString.getV)
+            } else if (value.hasList) {
+              val values = value.getList.getValuesList.asScala.map { v =>
+                if (v.hasString) v.getString.getV
+                else
+                  throw new DASSdkInvalidArgumentException(
+                    "Column 'request_headers' must be a record of strings or a record of list of strings.")
+              }.toList
+              key -> values
+            } else {
+              throw new DASSdkInvalidArgumentException(
+                "Column 'request_headers' must be a record of strings or a record of list of strings.")
             }
-            key -> value.getString.getV
           }
           result = result.copy(requestHeaders = Some(items.toMap))
 

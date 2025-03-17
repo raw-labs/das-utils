@@ -124,7 +124,7 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
     // The table might append "?debug=true&test=123" to the URL
     assert(rowMap("url") == "https://example.com/post")
     assert(rowMap("follow_redirect") == "true")
-    assert(rowMap("request_headers") == "{Content-Type:application/json, User-Agent:MyDAS}")
+    assert(rowMap("request_headers") == "{Content-Type:[application/json], User-Agent:[MyDAS]}")
     assert(rowMap("url_args") == "{debug:true, test:123}")
     assert(rowMap("response_status_code") == "200")
     assert(rowMap("response_body") == "")
