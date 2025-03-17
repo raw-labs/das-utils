@@ -101,7 +101,7 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
     assert(rowMap("response_headers") == "{foo:[bar, buzz]}")
   }
 
-  test("GET with request headers mixed strings and list of strings => success") {
+  test("GET with request header with list of strings => success") {
     val qUrl = qualString("url", "https://example.com/get")
 
     val qHeaders =
