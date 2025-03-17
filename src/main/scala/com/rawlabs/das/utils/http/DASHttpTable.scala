@@ -19,6 +19,7 @@ import java.security.cert.X509Certificate
 import javax.net.ssl._
 
 import scala.jdk.CollectionConverters._
+import scala.util.control.NonFatal
 
 import com.rawlabs.das.sdk.scala.DASTable
 import com.rawlabs.das.sdk.{DASExecuteResult, DASSdkInvalidArgumentException}
@@ -31,11 +32,12 @@ import com.rawlabs.protocol.das.v1.tables.{
   TableId
 }
 import com.rawlabs.protocol.das.v1.types._
+import com.typesafe.scalalogging.StrictLogging
 
 /**
  * A single-table HTTP DAS that retrieves data from an HTTP endpoint
  */
-class DASHttpTable extends DASTable {
+class DASHttpTable extends DASTable with StrictLogging {
 
   // Define columns with their protobuf type
   private val columns: Seq[(String, Type)] = Seq(
@@ -210,18 +212,14 @@ class DASHttpTable extends DASTable {
       case ex: IllegalArgumentException =>
         // e.g., malformed URL or invalid arguments
         throw new DASSdkInvalidArgumentException(s"Invalid request parameter: ${ex.getMessage}", ex)
+      case NonFatal(ex) =>
+        logger.error("Unexpected error", ex)
+        throw new DASSdkInvalidArgumentException(s"Unexpected error", ex)
+
     } finally {
       client.close()
     }
   }
-
-  // read-only
-  override def insert(row: ProtoRow): ProtoRow =
-    throw new DASSdkInvalidArgumentException("HTTP single-table is read-only.")
-  override def update(rowId: Value, newRow: ProtoRow): ProtoRow =
-    throw new DASSdkInvalidArgumentException("HTTP single-table is read-only.")
-  override def delete(rowId: Value): Unit =
-    throw new DASSdkInvalidArgumentException("HTTP single-table is read-only.")
 
   /**
    * Helper to build an HttpClient with connect-timeout, SSL trust-all, and redirect handling.
@@ -287,62 +285,60 @@ class DASHttpTable extends DASTable {
     for (q <- quals) {
       val colName = q.getName
 
-      // We only handle simpleQual
-      if (!q.hasSimpleQual) {
-        throw new DASSdkInvalidArgumentException(s"Column '$colName' must be a simple equality.")
-      }
-
       val sq = q.getSimpleQual
-
-      // We only handle operator = EQUALS
-      if (sq.getOperator != Operator.EQUALS) {
-        throw new DASSdkInvalidArgumentException(
-          s"Only EQUALS operator is supported. Found ${sq.getOperator} for column '$colName'.")
-      }
 
       val v = sq.getValue
 
       colName match {
         case "url" =>
+          // We only handle operator = EQUALS
+          ensureEqualsOperator(q)
           if (!v.hasString) {
             throw new DASSdkInvalidArgumentException("Column 'url' must be a string value.")
           }
           result = result.copy(url = Some(v.getString.getV))
 
         case "method" =>
+          ensureEqualsOperator(q)
           if (!v.hasString) {
             throw new DASSdkInvalidArgumentException("Column 'method' must be a string value.")
           }
           result = result.copy(method = Some(v.getString.getV))
 
         case "request_body" =>
+          ensureEqualsOperator(q)
           if (!v.hasString) {
             throw new DASSdkInvalidArgumentException("Column 'request_body' must be a string value.")
           }
           result = result.copy(requestBody = Some(v.getString.getV))
 
         case "follow_redirect" =>
+          ensureEqualsOperator(q)
           if (!v.hasBool) {
             throw new DASSdkInvalidArgumentException("Column 'follow_redirect' must be a boolean value.")
           }
           result = result.copy(followRedirect = Some(v.getBool.getV))
 
         case "connect_timeout_millis" =>
+          ensureEqualsOperator(q)
           if (!v.hasInt) {
             throw new DASSdkInvalidArgumentException("Column 'connect_timeout_millis' must be an integer value.")
           }
           result = result.copy(connectTimeoutMillis = Some(v.getInt.getV))
         case "request_timeout_millis" =>
+          ensureEqualsOperator(q)
           if (!v.hasInt) {
             throw new DASSdkInvalidArgumentException("Column 'request_timeout_millis' must be an integer value.")
           }
           result = result.copy(requestTimeoutMillis = Some(v.getInt.getV))
         case "ssl_trust_all" =>
+          ensureEqualsOperator(q)
           if (!v.hasBool) {
             throw new DASSdkInvalidArgumentException("Column 'ssl_trust_all' must be a boolean value.")
           }
           result = result.copy(sslTrustAll = Some(v.getBool.getV))
         case "request_headers" =>
+          ensureEqualsOperator(q)
           if (!v.hasRecord) {
             throw new DASSdkInvalidArgumentException("Column 'request_headers' must be a record.")
           }
@@ -358,6 +354,7 @@ class DASHttpTable extends DASTable {
           result = result.copy(requestHeaders = Some(items.toMap))
 
         case "url_args" =>
+          ensureEqualsOperator(q)
           if (!v.hasRecord) {
             throw new DASSdkInvalidArgumentException("Column 'url_args' must be a record.")
           }
@@ -371,10 +368,9 @@ class DASHttpTable extends DASTable {
             key -> value.getString.getV
           }
           result = result.copy(urlArgs = Some(items.toMap))
+        // ignore other qualifiers
+        case _ =>
 
-        // If you want to **throw** on unknown columns:
-        case unknown =>
-          throw new DASSdkInvalidArgumentException(s"Column '$unknown' is not recognized by this DAS.")
       }
     }
     result
@@ -382,6 +378,12 @@ class DASHttpTable extends DASTable {
   // --------------------------------------------------------------------------------
   // Additional helper methods
   // --------------------------------------------------------------------------------
+
+  private def ensureEqualsOperator(q: Qual): Unit = {
+    if (!q.hasSimpleQual || q.getSimpleQual.getOperator != Operator.EQUALS) {
+      throw new DASSdkInvalidArgumentException(s"Only EQUALS operator is supported for column ${q.getName}")
+    }
+  }
 
   /**
    * Build the final URL with appended query args if needed. E.g., if urlArgs has ["foo=bar","debug=true"], we do
