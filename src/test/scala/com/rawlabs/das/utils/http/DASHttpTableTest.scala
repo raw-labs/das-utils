@@ -32,6 +32,7 @@ import com.rawlabs.protocol.das.v1.types.{
   Value => ProtoValue,
   ValueBool,
   ValueInt,
+  ValueList,
   ValueRecord,
   ValueRecordAttr,
   ValueString
@@ -81,7 +82,7 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
     val qMethod = qualString("method", "GET")
     val qUrl = qualString("url", "https://example.com/get")
     // get method without args is returning a 502 error
-    val qArgs = qualRecordOfStrings("url_args", Map("debug" -> "true", "test" -> "123"))
+    val qArgs = qualRecord("url_args", Map("debug" -> "true", "test" -> "123"))
 
     val quals = Seq(qUrl, qMethod, qArgs)
     val result = mockHttpTable.execute(
@@ -100,21 +101,39 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
     assert(rowMap("response_headers") == "{foo:[bar, buzz]}")
   }
 
+  test("GET with request headers mixed strings and list of strings => success") {
+    val qUrl = qualString("url", "https://example.com/get")
+
+    val qHeaders =
+      qualRecord("request_headers", Map("simple" -> "foo", "repeated" -> List("foo", "bar")))
+
+    val quals = Seq(qUrl, qHeaders)
+
+    val result = mockHttpTable.execute(quals, Seq("url", "request_headers"), Seq.empty, None)
+    val rows = collectRows(result)
+    assert(rows.size == 1)
+
+    val rowMap = rowToMap(rows.head)
+    // The table might append "?debug=true&test=123" to the URL
+    assert(rowMap("url") == "https://example.com/get")
+    assert(rowMap("request_headers") == "{simple:foo, repeated:[foo, bar]}")
+  }
+
   test("POST with custom headers & url_args => success") {
     val qUrl = qualString("url", "https://example.com/post")
     val qMethod = qualString("method", "POST")
     val qBody = qualString("request_body", """{"foo":"bar"}""")
-    val qRedirect = qualBool("follow_redirect", boolVal = true)
+    val qRedirect = qualBool("follow_redirects", boolVal = true)
 
     val qHeaders =
-      qualRecordOfStrings("request_headers", Map("Content-Type" -> "application/json", "User-Agent" -> "MyDAS"))
-    val qArgs = qualRecordOfStrings("url_args", Map("debug" -> "true", "test" -> "123"))
+      qualRecord("request_headers", Map("Content-Type" -> "application/json", "User-Agent" -> "MyDAS"))
+    val qArgs = qualRecord("url_args", Map("debug" -> "true", "test" -> "123"))
 
     val quals = Seq(qUrl, qMethod, qBody, qRedirect, qHeaders, qArgs)
 
     val result = mockHttpTable.execute(
       quals,
-      Seq("url", "request_headers", "url_args", "follow_redirect", "response_status_code", "response_body"),
+      Seq("url", "request_headers", "url_args", "follow_redirects", "response_status_code", "response_body"),
       Seq.empty,
       None)
     val rows = collectRows(result)
@@ -123,12 +142,11 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
     val rowMap = rowToMap(rows.head)
     // The table might append "?debug=true&test=123" to the URL
     assert(rowMap("url") == "https://example.com/post")
-    assert(rowMap("follow_redirect") == "true")
-    assert(rowMap("request_headers") == "{Content-Type:[application/json], User-Agent:[MyDAS]}")
+    assert(rowMap("follow_redirects") == "true")
+    assert(rowMap("request_headers") == "{Content-Type:application/json, User-Agent:MyDAS}")
     assert(rowMap("url_args") == "{debug:true, test:123}")
     assert(rowMap("response_status_code") == "200")
     assert(rowMap("response_body") == "")
-
   }
 
   test("DELETE method => success") {
@@ -170,7 +188,7 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
     val qUrl = qualString("url", "https://example.com/put")
     val qBody = qualString("request_body", """{"foo":"bar"}""")
     // put method without args is returning a 502 error
-    val qArgs = qualRecordOfStrings("url_args", Map("debug" -> "true", "test" -> "123"))
+    val qArgs = qualRecord("url_args", Map("debug" -> "true", "test" -> "123"))
 
     val quals = Seq(qUrl, qMethod, qBody, qArgs)
     val result = mockHttpTable.execute(quals, Seq("method", "response_status_code", "response_body"), Seq.empty, None)
@@ -520,14 +538,27 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
 
   // A helper method to build a record of string key->value for "request_headers" or "url_args"
   // For example: request_headers = { "Content-Type" : "application/json", "X-Foo" : "Bar" }
-  private def qualRecordOfStrings(colName: String, kvPairs: Map[String, String]): ProtoQual = {
+  private def qualRecord(colName: String, kvPairs: Map[String, Any]): ProtoQual = {
     val recordBuilder = ValueRecord.newBuilder()
-    kvPairs.foreach { case (k, v) =>
-      val valAttr = ValueRecordAttr
-        .newBuilder()
-        .setName(k)
-        .setValue(ProtoValue.newBuilder().setString(ValueString.newBuilder().setV(v)))
-      recordBuilder.addAtts(valAttr)
+    kvPairs.foreach {
+      case (k, v: String) =>
+        val valAttr = ValueRecordAttr
+          .newBuilder()
+          .setName(k)
+          .setValue(ProtoValue.newBuilder().setString(ValueString.newBuilder().setV(v)))
+        recordBuilder.addAtts(valAttr)
+      case (k, v: List[_]) =>
+        val values = v.map(s => ProtoValue.newBuilder().setString(ValueString.newBuilder().setV(s.toString)).build())
+        val valAttr = ValueRecordAttr
+          .newBuilder()
+          .setName(k)
+          .setValue(
+            ProtoValue
+              .newBuilder()
+              .setList(ValueList.newBuilder().addAllValues(values.asJava)))
+
+        recordBuilder.addAtts(valAttr)
+      case _ => throw new IllegalArgumentException("Only string or list of strings are supported")
     }
     val recordValue = ProtoValue.newBuilder().setRecord(recordBuilder)
 

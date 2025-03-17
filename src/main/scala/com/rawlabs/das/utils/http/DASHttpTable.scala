@@ -13,7 +13,7 @@
 package com.rawlabs.das.utils.http
 
 import java.net.URI
-import java.net.http.{HttpClient, HttpRequest, HttpResponse}
+import java.net.http.{HttpClient, HttpHeaders, HttpRequest, HttpResponse}
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import javax.net.ssl._
@@ -46,7 +46,7 @@ class DASHttpTable extends DASTable with StrictLogging {
     "request_headers" -> mkRecordType(), // jsonb record
     "url_args" -> mkRecordType(), // jsonb record
     "request_body" -> mkStringType(),
-    "follow_redirect" -> mkBoolType(),
+    "follow_redirects" -> mkBoolType(),
     "connect_timeout_millis" -> mkIntType(),
     "request_timeout_millis" -> mkIntType(),
     "ssl_trust_all" -> mkBoolType(),
@@ -107,22 +107,22 @@ class DASHttpTable extends DASTable with StrictLogging {
       throw new DASSdkInvalidArgumentException("Missing 'url' in WHERE clause")
     }
 
-    val method = params.method.getOrElse("GET").toUpperCase
-    val requestHeaders = params.requestHeaders.getOrElse(Map.empty)
-    val urlArgs = params.urlArgs.getOrElse(Map.empty)
-    val body = params.requestBody.getOrElse("")
-    val followRedirect = params.followRedirect.getOrElse(false)
-    val connectTimeoutMillis = params.connectTimeoutMillis.getOrElse(5000)
-    val requestTimeoutMillis = params.requestTimeoutMillis.getOrElse(30000)
-    val sslTrustAll = params.sslTrustAll.getOrElse(false)
+    val method = params.method.getOrElse(ValueString.newBuilder().setV("GET").build())
+    val requestHeaders = params.requestHeaders.getOrElse(ValueRecord.newBuilder().build())
+    val urlArgs = params.urlArgs.getOrElse(ValueRecord.newBuilder().build())
+    val body = params.requestBody.getOrElse(ValueString.newBuilder().setV("").build())
+    val followRedirects = params.followRedirects.getOrElse(ValueBool.newBuilder().setV(false).build())
+    val connectTimeoutMillis = params.connectTimeoutMillis.getOrElse(ValueInt.newBuilder().setV(5000).build())
+    val requestTimeoutMillis = params.requestTimeoutMillis.getOrElse(ValueInt.newBuilder().setV(30000).build())
+    val sslTrustAll = params.sslTrustAll.getOrElse(ValueBool.newBuilder().setV(false).build())
 
     // 3) Build HttpClient with connect timeout and optional SSL trust-all
-    val client = buildHttpClient(followRedirect, connectTimeoutMillis, sslTrustAll)
+    val client = buildHttpClient(followRedirects.getV, connectTimeoutMillis.getV, sslTrustAll.getV)
 
     try {
       // 4) Construct the final URL with urlArgs if you like (like "?foo=bar&test=123").
       //    Or you can handle them differently. For simplicity, let's assume we just do "baseUrl?arg1&arg2"
-      val finalUrl = buildUrlWithArgs(url, urlArgs)
+      val finalUrl = buildUrlWithArgs(url.getV, urlArgs)
 
       // 5) Create request
       val requestBuilder =
@@ -133,27 +133,24 @@ class DASHttpTable extends DASTable with StrictLogging {
             throw new DASSdkInvalidArgumentException(s"Invalid url: ${ex.getMessage}", ex)
         }
 
-      requestBuilder.timeout(java.time.Duration.ofMillis(requestTimeoutMillis))
+      requestBuilder.timeout(java.time.Duration.ofMillis(requestTimeoutMillis.getV))
 
-      method.toUpperCase match {
+      method.getV.toUpperCase match {
         case "GET"     => requestBuilder.GET()
         case "DELETE"  => requestBuilder.DELETE()
-        case "POST"    => requestBuilder.POST(HttpRequest.BodyPublishers.ofString(body))
-        case "PUT"     => requestBuilder.PUT(HttpRequest.BodyPublishers.ofString(body))
-        case "PATCH"   => requestBuilder.method("PATCH", HttpRequest.BodyPublishers.ofString(body))
+        case "POST"    => requestBuilder.POST(HttpRequest.BodyPublishers.ofString(body.getV))
+        case "PUT"     => requestBuilder.PUT(HttpRequest.BodyPublishers.ofString(body.getV))
+        case "PATCH"   => requestBuilder.method("PATCH", HttpRequest.BodyPublishers.ofString(body.getV))
         case "HEAD"    => requestBuilder.HEAD()
-        case "OPTIONS" => requestBuilder.method("OPTIONS", HttpRequest.BodyPublishers.ofString(body))
+        case "OPTIONS" => requestBuilder.method("OPTIONS", HttpRequest.BodyPublishers.ofString(body.getV))
         case unknown   => throw new DASSdkInvalidArgumentException(s"Unsupported HTTP method: $unknown")
       }
 
       // 6) Add request headers
-      requestHeaders.foreach { case (k, values) => values.foreach(v => requestBuilder.header(k, v)) }
+      addRequestHeaders(requestBuilder, requestHeaders)
 
       // 7) Send
       val response = client.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString())
-      val statusCode = response.statusCode()
-      val respBody = response.body()
-
       // 8) Build a single row with all columns
       val rowBuilder = ProtoRow.newBuilder()
 
@@ -163,21 +160,20 @@ class DASHttpTable extends DASTable with StrictLogging {
 
       // Convert everything into a Map of col -> Value
       val colValues: Map[String, Value] = Map(
-        "url" -> mkStringValue(url),
-        "method" -> mkStringValue(method),
-        "request_headers" -> mkRecordValue(requestHeaders),
-        "url_args" -> mkRecordValue(urlArgs),
-        "request_body" -> mkStringValue(body),
-        "follow_redirect" -> Value.newBuilder().setBool(ValueBool.newBuilder().setV(followRedirect)).build(),
-        "response_status_code" -> Value.newBuilder().setInt(ValueInt.newBuilder().setV(statusCode)).build(),
-        "response_body" -> mkStringValue(respBody),
-        "response_headers" -> mkRecordValue(
-          response.headers().map().asScala.map { case (k, v) => k -> v.asScala.toList }.toMap))
+        "url" -> Value.newBuilder().setString(url).build(),
+        "method" -> Value.newBuilder().setString(method).build(),
+        "request_headers" -> Value.newBuilder().setRecord(requestHeaders).build(),
+        "url_args" -> Value.newBuilder().setRecord(urlArgs).build(),
+        "request_body" -> Value.newBuilder().setString(body).build(),
+        "follow_redirects" -> Value.newBuilder().setBool(followRedirects).build(),
+        "response_status_code" -> mkInValue(response.statusCode()),
+        "response_body" -> mkStringValue(response.body()),
+        "response_headers" -> headersToRecordValue(response.headers()))
 
       // Add them if in wantedCols
       columns.foreach { case (colName, _) =>
         if (wantedCols.contains(colName)) {
-          val valObj = colValues.getOrElse(colName, mkStringValue(""))
+          val valObj = colValues(colName)
           rowBuilder.addColumns(
             ProtoColumn
               .newBuilder()
@@ -263,15 +259,15 @@ class DASHttpTable extends DASTable with StrictLogging {
    * We define a small container for the typed columns that can appear in WHERE.
    */
   private case class ParsedParams(
-      url: Option[String] = None,
-      method: Option[String] = None,
-      requestHeaders: Option[Map[String, List[String]]] = None,
-      urlArgs: Option[Map[String, String]] = None,
-      requestBody: Option[String] = None,
-      followRedirect: Option[Boolean] = None,
-      connectTimeoutMillis: Option[Int] = None,
-      requestTimeoutMillis: Option[Int] = None,
-      sslTrustAll: Option[Boolean] = None)
+      url: Option[ValueString] = None,
+      method: Option[ValueString] = None,
+      requestHeaders: Option[ValueRecord] = None,
+      urlArgs: Option[ValueRecord] = None,
+      requestBody: Option[ValueString] = None,
+      followRedirects: Option[ValueBool] = None,
+      connectTimeoutMillis: Option[ValueInt] = None,
+      requestTimeoutMillis: Option[ValueInt] = None,
+      sslTrustAll: Option[ValueBool] = None)
 
   /**
    * parseQuals converts Quals to typed fields. We only handle operator == EQUALS, and we check the Value's type
@@ -282,9 +278,7 @@ class DASHttpTable extends DASTable with StrictLogging {
 
     for (q <- quals) {
       val colName = q.getName
-
       val sq = q.getSimpleQual
-
       val v = sq.getValue
 
       colName match {
@@ -294,89 +288,55 @@ class DASHttpTable extends DASTable with StrictLogging {
           if (!v.hasString) {
             throw new DASSdkInvalidArgumentException("Column 'url' must be a string value.")
           }
-          result = result.copy(url = Some(v.getString.getV))
-
+          result = result.copy(url = Some(v.getString))
         case "method" =>
           ensureEqualsOperator(q)
           if (!v.hasString) {
             throw new DASSdkInvalidArgumentException("Column 'method' must be a string value.")
           }
-          result = result.copy(method = Some(v.getString.getV))
-
+          result = result.copy(method = Some(v.getString))
         case "request_body" =>
           ensureEqualsOperator(q)
           if (!v.hasString) {
             throw new DASSdkInvalidArgumentException("Column 'request_body' must be a string value.")
           }
-          result = result.copy(requestBody = Some(v.getString.getV))
-
-        case "follow_redirect" =>
+          result = result.copy(requestBody = Some(v.getString))
+        case "follow_redirects" =>
           ensureEqualsOperator(q)
           if (!v.hasBool) {
             throw new DASSdkInvalidArgumentException("Column 'follow_redirect' must be a boolean value.")
           }
-          result = result.copy(followRedirect = Some(v.getBool.getV))
-
+          result = result.copy(followRedirects = Some(v.getBool))
         case "connect_timeout_millis" =>
           ensureEqualsOperator(q)
           if (!v.hasInt) {
             throw new DASSdkInvalidArgumentException("Column 'connect_timeout_millis' must be an integer value.")
           }
-          result = result.copy(connectTimeoutMillis = Some(v.getInt.getV))
+          result = result.copy(connectTimeoutMillis = Some(v.getInt))
         case "request_timeout_millis" =>
           ensureEqualsOperator(q)
           if (!v.hasInt) {
             throw new DASSdkInvalidArgumentException("Column 'request_timeout_millis' must be an integer value.")
           }
-          result = result.copy(requestTimeoutMillis = Some(v.getInt.getV))
+          result = result.copy(requestTimeoutMillis = Some(v.getInt))
         case "ssl_trust_all" =>
           ensureEqualsOperator(q)
           if (!v.hasBool) {
             throw new DASSdkInvalidArgumentException("Column 'ssl_trust_all' must be a boolean value.")
           }
-          result = result.copy(sslTrustAll = Some(v.getBool.getV))
+          result = result.copy(sslTrustAll = Some(v.getBool))
         case "request_headers" =>
           ensureEqualsOperator(q)
           if (!v.hasRecord) {
             throw new DASSdkInvalidArgumentException("Column 'request_headers' must be a record.")
           }
-          val rec = v.getRecord
-          val items = rec.getAttsList.asScala.toList.map { it =>
-            val key = it.getName
-            val value = it.getValue
-            if (value.hasString) {
-              key -> List(value.getString.getV)
-            } else if (value.hasList) {
-              val values = value.getList.getValuesList.asScala.map { v =>
-                if (v.hasString) v.getString.getV
-                else
-                  throw new DASSdkInvalidArgumentException(
-                    "Column 'request_headers' must be a record of strings or a record of list of strings.")
-              }.toList
-              key -> values
-            } else {
-              throw new DASSdkInvalidArgumentException(
-                "Column 'request_headers' must be a record of strings or a record of list of strings.")
-            }
-          }
-          result = result.copy(requestHeaders = Some(items.toMap))
-
+          result = result.copy(requestHeaders = Some(v.getRecord))
         case "url_args" =>
           ensureEqualsOperator(q)
           if (!v.hasRecord) {
             throw new DASSdkInvalidArgumentException("Column 'url_args' must be a record.")
           }
-          val rec = v.getRecord
-          val items = rec.getAttsList.asScala.toList.map { it =>
-            val key = it.getName
-            val value = it.getValue
-            if (!value.hasString) {
-              throw new DASSdkInvalidArgumentException("Column 'url_args' must be a record of string values.")
-            }
-            key -> value.getString.getV
-          }
-          result = result.copy(urlArgs = Some(items.toMap))
-        // ignore other qualifiers
+          result = result.copy(urlArgs = Some(v.getRecord))
         case _ =>
 
       }
@@ -397,12 +357,44 @@ class DASHttpTable extends DASTable with StrictLogging {
    * Build the final URL with appended query args if needed. E.g., if urlArgs has ["foo=bar","debug=true"], we do
    * "?foo=bar&debug=true".
    */
-  private def buildUrlWithArgs(baseUrl: String, args: Map[String, String]): String = {
-    if (args.isEmpty) baseUrl
+  private def buildUrlWithArgs(baseUrl: String, args: ValueRecord): String = {
+    val atts = args.getAttsList.asScala
+
+    if (atts.isEmpty) baseUrl
     else {
       val sep = if (baseUrl.contains("?")) "&" else "?"
-      val encoded = args.map { case (k, v) => k + "=" + java.net.URLEncoder.encode(v, "UTF-8") }.mkString("&")
+      val encoded = atts
+        .map { att =>
+          val key = att.getName
+          val value = att.getValue.getString.getV
+          if (!att.getValue.hasString) {
+            throw new DASSdkInvalidArgumentException("Column 'url_args' must be a record of string values.")
+          }
+          key + "=" + java.net.URLEncoder.encode(value, "UTF-8")
+        }
+        .mkString("&")
       s"$baseUrl$sep$encoded"
+    }
+  }
+
+  private def addRequestHeaders(requestBuilder: HttpRequest.Builder, headers: ValueRecord): Unit = {
+    headers.getAttsList.asScala.foreach { att =>
+      val key = att.getName
+      if (att.getValue.hasString) {
+        val value = att.getValue.getString.getV
+        requestBuilder.header(key, value)
+      } else if (att.getValue.hasList) {
+        val values = att.getValue.getList.getValuesList.asScala
+        values.foreach { v =>
+          if (!v.hasString) {
+            throw new DASSdkInvalidArgumentException(
+              "Column 'request_headers' must be a record of strings or a record of list of strings.")
+          }
+
+          requestBuilder.header(key, v.getString.getV)
+        }
+      }
+
     }
   }
 
@@ -410,28 +402,22 @@ class DASHttpTable extends DASTable with StrictLogging {
     Value.newBuilder().setString(ValueString.newBuilder().setV(s)).build()
   }
 
-  private def mkRecordValue(values: Map[String, Any]) = {
-    val recordBuilder = ValueRecord.newBuilder()
-    // for now, we only support string and list of strings for values
-    val atts = values.map { case (k, v) =>
-      v match {
-        case s: String =>
-          val value = Value.newBuilder().setString(ValueString.newBuilder().setV(s)).build()
-          ValueRecordAttr.newBuilder().setName(k).setValue(value).build()
-        case l: List[_] =>
-          val list = ValueList.newBuilder()
-          l.foreach { s =>
-            list.addValues(Value.newBuilder().setString(ValueString.newBuilder().setV(s.toString)).build())
-          }
-          val value = Value.newBuilder().setList(list).build()
-          ValueRecordAttr.newBuilder().setName(k).setValue(value).build()
-        case _ =>
-          throw new DASSdkInvalidArgumentException(s"Unsupported value type for record: $v")
+  private def headersToRecordValue(values: HttpHeaders): Value = {
+    val atts = values.map().asScala.map { case (k, v) =>
+      val list = ValueList.newBuilder()
+      v.asScala.foreach { s =>
+        list.addValues(Value.newBuilder().setString(ValueString.newBuilder().setV(s)).build())
       }
+      val value = Value.newBuilder().setList(list).build()
+      ValueRecordAttr.newBuilder().setName(k).setValue(value).build()
     }
 
-    recordBuilder.addAllAtts(atts.asJava)
+    val recordBuilder = ValueRecord.newBuilder().addAllAtts(atts.asJava)
     Value.newBuilder().setRecord(recordBuilder).build()
+  }
+
+  private def mkInValue(value: Int): Value = {
+    Value.newBuilder().setInt(ValueInt.newBuilder().setV(value)).build()
   }
 
   private def mkStringType(): Type = {
