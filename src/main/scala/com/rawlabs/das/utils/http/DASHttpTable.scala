@@ -278,61 +278,68 @@ class DASHttpTable extends DASTable with StrictLogging {
 
     for (q <- quals) {
       val colName = q.getName
-      val sq = q.getSimpleQual
-      val v = sq.getValue
 
       colName match {
         case "url" =>
           // We only handle operator = EQUALS
           ensureEqualsOperator(q)
+          val v = q.getSimpleQual.getValue
           if (!v.hasString) {
             throw new DASSdkInvalidArgumentException("Column 'url' must be a string value.")
           }
           result = result.copy(url = Some(v.getString))
         case "method" =>
           ensureEqualsOperator(q)
+          val v = q.getSimpleQual.getValue
           if (!v.hasString) {
             throw new DASSdkInvalidArgumentException("Column 'method' must be a string value.")
           }
           result = result.copy(method = Some(v.getString))
         case "request_body" =>
           ensureEqualsOperator(q)
+          val v = q.getSimpleQual.getValue
           if (!v.hasString) {
             throw new DASSdkInvalidArgumentException("Column 'request_body' must be a string value.")
           }
           result = result.copy(requestBody = Some(v.getString))
         case "follow_redirects" =>
           ensureEqualsOperator(q)
+          val v = q.getSimpleQual.getValue
           if (!v.hasBool) {
             throw new DASSdkInvalidArgumentException("Column 'follow_redirect' must be a boolean value.")
           }
           result = result.copy(followRedirects = Some(v.getBool))
         case "connect_timeout_millis" =>
           ensureEqualsOperator(q)
+          val v = q.getSimpleQual.getValue
           if (!v.hasInt) {
             throw new DASSdkInvalidArgumentException("Column 'connect_timeout_millis' must be an integer value.")
           }
           result = result.copy(connectTimeoutMillis = Some(v.getInt))
         case "request_timeout_millis" =>
           ensureEqualsOperator(q)
+          val v = q.getSimpleQual.getValue
           if (!v.hasInt) {
             throw new DASSdkInvalidArgumentException("Column 'request_timeout_millis' must be an integer value.")
           }
           result = result.copy(requestTimeoutMillis = Some(v.getInt))
         case "ssl_trust_all" =>
           ensureEqualsOperator(q)
+          val v = q.getSimpleQual.getValue
           if (!v.hasBool) {
             throw new DASSdkInvalidArgumentException("Column 'ssl_trust_all' must be a boolean value.")
           }
           result = result.copy(sslTrustAll = Some(v.getBool))
         case "request_headers" =>
           ensureEqualsOperator(q)
+          val v = q.getSimpleQual.getValue
           if (!v.hasRecord) {
             throw new DASSdkInvalidArgumentException("Column 'request_headers' must be a record.")
           }
           result = result.copy(requestHeaders = Some(v.getRecord))
         case "url_args" =>
           ensureEqualsOperator(q)
+          val v = q.getSimpleQual.getValue
           if (!v.hasRecord) {
             throw new DASSdkInvalidArgumentException("Column 'url_args' must be a record.")
           }
