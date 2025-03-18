@@ -393,8 +393,10 @@ class DASHttpTable extends DASTable with StrictLogging {
 
           requestBuilder.header(key, v.getString.getV)
         }
+      } else {
+        throw new DASSdkInvalidArgumentException(
+          "Column 'request_headers' must be a record of strings or a record of list of strings.")
       }
-
     }
   }
 
