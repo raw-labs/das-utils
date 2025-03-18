@@ -166,6 +166,9 @@ class DASHttpTable extends DASTable with StrictLogging {
         "url_args" -> Value.newBuilder().setRecord(urlArgs).build(),
         "request_body" -> Value.newBuilder().setString(body).build(),
         "follow_redirects" -> Value.newBuilder().setBool(followRedirects).build(),
+        "connect_timeout_millis" -> Value.newBuilder().setInt(connectTimeoutMillis).build(),
+        "request_timeout_millis" -> Value.newBuilder().setInt(requestTimeoutMillis).build(),
+        "ssl_trust_all" -> Value.newBuilder().setBool(sslTrustAll).build(),
         "response_status_code" -> mkInValue(response.statusCode()),
         "response_body" -> mkStringValue(response.body()),
         "response_headers" -> headersToRecordValue(response.headers()))
