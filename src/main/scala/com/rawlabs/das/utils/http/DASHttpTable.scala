@@ -173,7 +173,7 @@ class DASHttpTable extends DASTable with StrictLogging {
       // Add them if in wantedCols
       columns.foreach { case (colName, _) =>
         if (wantedCols.contains(colName)) {
-          val valObj = colValues(colName)
+          val valObj = colValues.getOrElse(colName, mkStringValue(""))
           rowBuilder.addColumns(
             ProtoColumn
               .newBuilder()
