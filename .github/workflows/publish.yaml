@@ -36,7 +36,7 @@ jobs:
         password: ${{ secrets.WRITE_PACKAGES }}
         logout: false
     - name: publish docker images
-      run: .github/scripts/dnd-sbt docker/Docker/publish
+      run: .github/scripts/dnd-sbt Docker/publish
     - name: set should_trigger_deploy
       id: should_trigger_deploy
       shell: bash
@@ -47,6 +47,9 @@ jobs:
     needs: [publish-jars, publish-docker-image]
     runs-on: self-hosted
     steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
     - uses: softprops/action-gh-release@v2
       with:
         token: ${{ secrets.RAW_CI_PAT }}
@@ -67,7 +70,7 @@ jobs:
           with:
             token: ${{ secrets.RAW_CI_PAT }}
             repository: raw-labs/mvp-deployer
-            event-type: das-http-integration-cd
+            event-type: das-utils-integration-cd
             client-payload: |-
               {
                 "aws_region": "eu-west-1",
