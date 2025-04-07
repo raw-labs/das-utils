@@ -1,0 +1,1 @@
+jdk.internal.httpclient.disableHostnameVerification = true
