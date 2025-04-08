@@ -111,7 +111,7 @@ class DASHttpTable extends DASTable with StrictLogging {
     val requestHeaders = params.requestHeaders.getOrElse(ValueRecord.newBuilder().build())
     val urlArgs = params.urlArgs.getOrElse(ValueRecord.newBuilder().build())
     val body = params.requestBody.getOrElse(ValueString.newBuilder().setV("").build())
-    val followRedirects = params.followRedirects.getOrElse(ValueBool.newBuilder().setV(false).build())
+    val followRedirects = params.followRedirects.getOrElse(ValueBool.newBuilder().setV(true).build())
     val connectTimeoutMillis = params.connectTimeoutMillis.getOrElse(ValueInt.newBuilder().setV(5000).build())
     val requestTimeoutMillis = params.requestTimeoutMillis.getOrElse(ValueInt.newBuilder().setV(30000).build())
     val sslTrustAll = params.sslTrustAll.getOrElse(ValueBool.newBuilder().setV(false).build())
