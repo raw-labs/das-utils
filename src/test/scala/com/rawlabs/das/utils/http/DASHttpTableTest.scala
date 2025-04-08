@@ -252,6 +252,17 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
     assert(rowMap.contains("response_body"))
   }
 
+  test("follow_redirects default is true") {
+    val qUrl = qualString("url", "http://example.com")
+    val quals = Seq(qUrl)
+    val result = mockHttpTable.execute(quals, Seq("follow_redirects"), Seq.empty, None)
+    val rows = collectRows(result)
+    assert(rows.size == 1)
+
+    val rowMap = rowToMap(rows.head)
+    assert(rowMap("follow_redirects") == "true")
+  }
+
   test("Missing 'url' => throws DASSdkException") {
     val quals = Seq(
       qualString("method", "GET") // no url => should throw
