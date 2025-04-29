@@ -209,10 +209,6 @@ class DASHttpTable extends DASTable with StrictLogging {
       case ex: IllegalArgumentException =>
         // e.g., malformed URL or invalid arguments
         throw new DASSdkInvalidArgumentException(s"Invalid request parameter: ${ex.getMessage}", ex)
-      case NonFatal(ex) =>
-        logger.error("Unexpected error", ex)
-        throw new DASSdkInvalidArgumentException(s"Unexpected error", ex)
-
     } finally {
       client.close()
     }
