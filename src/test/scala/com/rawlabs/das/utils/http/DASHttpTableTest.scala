@@ -280,10 +280,23 @@ class DASHttpTableTest extends AnyFunSuite with BeforeAndAfterEach {
       qualString("url", "not and url") // malformed url => should throw
     )
 
-    assertThrows[DASSdkInvalidArgumentException] {
+    val ex = intercept[DASSdkInvalidArgumentException] {
       val res = mockHttpTable.execute(quals, Seq.empty, Seq.empty, None)
       collectRows(res)
     }
+    assert(ex.getMessage.contains("Illegal character in path at index"))
+  }
+
+  test("get correct message if scheme is missing") {
+    val quals = Seq(
+      qualString("url", "www.example.com") // no scheme
+    )
+
+    val ex = intercept[DASSdkInvalidArgumentException] {
+      val res = mockHttpTable.execute(quals, Seq.empty, Seq.empty, None)
+      collectRows(res)
+    }
+    assert(ex.getMessage.contains("Invalid url: URI with undefined scheme"))
   }
 
   test("not supported scheme 'url' => throws DASSdkInvalidArgumentException") {
